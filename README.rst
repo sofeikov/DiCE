@@ -26,6 +26,15 @@
 Diverse Counterfactual Explanations (DiCE) for ML
 ======================================================================
 
+.. note::
+
+   **This is a modernisation fork** of the `original DiCE repository <https://github.com/interpretml/DiCE>`_.
+   All credit goes to the original authors and contributors of the
+   `interpretml/DiCE <https://github.com/interpretml/DiCE>`_ project.
+   The goal of this fork is to bring the project up to date: migrating to
+   `uv <https://docs.astral.sh/uv/>`_ for dependency management, upgrading to newer pandas,
+   and removing the TensorFlow backend to focus exclusively on PyTorch as the deep learning framework.
+
 *How to explain a machine learning model such that the explanation is truthful to the model and yet interpretable to people?*
 
 `Ramaravind K. Mothilal <https://raam93.github.io/>`_, `Amit Sharma <http://www.amitsharma.in/>`_, `Chenhao Tan <https://chenhaot.com/>`_
