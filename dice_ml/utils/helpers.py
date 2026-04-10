@@ -3,9 +3,6 @@ This module containts helper functions to load data and get meta deta.
 """
 import os
 import pickle
-import shutil
-import zipfile
-from urllib.request import urlretrieve
 
 import numpy as np
 import pandas as pd
@@ -19,30 +16,26 @@ import dice_ml
 
 
 def load_adult_income_dataset(only_train=True):
-    """Loads adult income dataset from https://archive.ics.uci.edu/ml/datasets/Adult and prepares
+    """Loads adult income dataset from OpenML and prepares
        the data for data analysis based on https://rpubs.com/H_Zhu/235617
 
     :return adult_data: returns preprocessed adult income dataset.
     """
-    # Download the adult dataset from https://archive.ics.uci.edu/static/public/2/adult.zip as a zip folder
-    outdirname = 'adult'
-    zipfilename = outdirname + '.zip'
-    urlretrieve('https://archive.ics.uci.edu/static/public/2/adult.zip', zipfilename)
-    with zipfile.ZipFile(zipfilename, 'r') as unzip:
-        unzip.extractall(outdirname)
+    from sklearn.datasets import fetch_openml
 
-    raw_data = np.genfromtxt(outdirname + '/adult.data',
-                             delimiter=', ', dtype=str, invalid_raise=False)
+    data = fetch_openml("adult", version=2, as_frame=True)
+    adult_data = data.frame
 
-    #  column names from "https://archive.ics.uci.edu/ml/datasets/Adult"
-    column_names = ['age', 'workclass', 'fnlwgt', 'education', 'educational-num', 'marital-status', 'occupation',
-                    'relationship', 'race', 'gender', 'capital-gain', 'capital-loss', 'hours-per-week', 'native-country',
-                    'income']
+    # OpenML uses 'sex' and 'class' as column names
+    adult_data = adult_data.rename(columns={'sex': 'gender', 'class': 'income'})
 
-    adult_data = pd.DataFrame(raw_data, columns=column_names)
+    # Convert categorical columns to strings; replace NaN markers with '?'
+    # so the existing replacement logic below handles missing values
+    for col in adult_data.select_dtypes(include=['category']).columns:
+        adult_data[col] = adult_data[col].astype(str).replace('nan', '?')
 
     # For more details on how the below transformations are made, please refer to https://rpubs.com/H_Zhu/235617
-    adult_data = adult_data.astype({"age": np.int64, "educational-num": np.int64, "hours-per-week": np.int64})
+    adult_data = adult_data.astype({"age": np.int64, "hours-per-week": np.int64})
 
     adult_data = adult_data.replace({'workclass': {'Without-pay': 'Other/Unknown', 'Never-worked': 'Other/Unknown'}})
     adult_data = adult_data.replace({'workclass': {'Federal-gov': 'Government', 'State-gov': 'Government',
@@ -76,7 +69,7 @@ def load_adult_income_dataset(only_train=True):
     adult_data = adult_data[['age', 'workclass', 'education', 'marital-status', 'occupation',
                              'race', 'gender', 'hours-per-week', 'income']]
 
-    adult_data = adult_data.replace({'income': {'<=50K': 0, '>50K': 1}})
+    adult_data = adult_data.replace({'income': {'<=50K': 0, '>50K': 1, '<=50K.': 0, '>50K.': 1}})
 
     adult_data = adult_data.replace({'education': {'Assoc-voc': 'Assoc', 'Assoc-acdm': 'Assoc',
                                                    '11th': 'School', '10th': 'School', '7th-8th': 'School',
@@ -88,11 +81,6 @@ def load_adult_income_dataset(only_train=True):
     if only_train:
         train, _ = train_test_split(adult_data, test_size=0.2, random_state=17)
         adult_data = train.reset_index(drop=True)
-
-    # Remove the downloaded dataset
-    if os.path.isdir(outdirname):
-        entire_path = os.path.abspath(outdirname)
-        shutil.rmtree(entire_path)
 
     return adult_data
 
