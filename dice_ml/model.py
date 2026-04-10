@@ -31,7 +31,7 @@ class Model:
         :param kw_args: Dictionary of additional keyword arguments to pass to func. DiCE's data_interface is appended
                         to the dictionary of kw_args, by default.
         """
-        if backend not in BackEndTypes.ALL:
+        if not isinstance(backend, dict) and backend not in BackEndTypes.ALL:
             warnings.warn('{0} backend not in supported backends {1}'.format(
                 backend, ','.join(BackEndTypes.ALL)), stacklevel=2)
 

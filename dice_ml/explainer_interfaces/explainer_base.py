@@ -5,7 +5,7 @@
 import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -49,7 +49,7 @@ class ExplainerBase(ABC):
         #   [self.data_interface.get_decimal_precisions()[ix] for ix in self.encoded_continuous_feature_indexes]
 
     def _find_features_having_missing_values(
-            self, data: Any) -> List[str]:
+            self, data: Any) -> list[str]:
         """Return list of features which have missing values.
 
         :param data: The dataset to check.

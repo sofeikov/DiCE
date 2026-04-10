@@ -69,7 +69,7 @@ def load_adult_income_dataset(only_train=True):
     adult_data = adult_data[['age', 'workclass', 'education', 'marital-status', 'occupation',
                              'race', 'gender', 'hours-per-week', 'income']]
 
-    adult_data = adult_data.replace({'income': {'<=50K': 0, '>50K': 1, '<=50K.': 0, '>50K.': 1}})
+    adult_data['income'] = adult_data['income'].map({'<=50K': 0, '>50K': 1, '<=50K.': 0, '>50K.': 1})
 
     adult_data = adult_data.replace({'education': {'Assoc-voc': 'Assoc', 'Assoc-acdm': 'Assoc',
                                                    '11th': 'School', '10th': 'School', '7th-8th': 'School',

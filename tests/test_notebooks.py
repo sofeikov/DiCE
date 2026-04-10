@@ -4,7 +4,6 @@ Adapted from the same code for the Microsoft DoWhy library.
 
 import os
 import subprocess
-import sys
 import tempfile
 
 import nbformat
@@ -28,20 +27,10 @@ def get_notebook_parameter_list():
             "DiCE_with_private_data.ipynb",  # needs compatible version of sklearn to load model
             "Benchmarking_different_CF_explanation_methods.ipynb"
     ]
-    # notebooks that don't need to run on python 3.10
-    torch_notebooks_not_3_10 = [
-        "DiCE_getting_started.ipynb"
-    ]
-
     # Creating the list of notebooks to run
     parameter_list = []
     for nb in notebooks_list:
         if nb in advanced_notebooks:
-            param = pytest.param(
-                nb,
-                marks=[pytest.mark.skip, pytest.mark.advanced],
-                id=nb)
-        elif sys.version_info >= (3, 10) and nb in torch_notebooks_not_3_10:
             param = pytest.param(
                 nb,
                 marks=[pytest.mark.skip, pytest.mark.advanced],
