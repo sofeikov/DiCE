@@ -1,5 +1,5 @@
 """Module pointing to different implementations of DiCE based on different
-   frameworks such as Tensorflow or PyTorch or sklearn, and different methods
+   frameworks such as PyTorch or sklearn, and different methods
    such as RandomSampling, DiCEKD or DiCEGenetic"""
 
 from raiutils.exceptions import UserConfigValidationException
@@ -58,19 +58,7 @@ def decide(model_interface, method):
         from dice_ml.explainer_interfaces.dice_KD import DiceKD
         return DiceKD
     elif method == SamplingStrategy.Gradient:
-        if model_interface.backend == BackEndTypes.Tensorflow1:
-            # pretrained Keras Sequential model with Tensorflow 1.x backend
-            from dice_ml.explainer_interfaces.dice_tensorflow1 import \
-                DiceTensorFlow1
-            return DiceTensorFlow1
-
-        elif model_interface.backend == BackEndTypes.Tensorflow2:
-            # pretrained Keras Sequential model with Tensorflow 2.x backend
-            from dice_ml.explainer_interfaces.dice_tensorflow2 import \
-                DiceTensorFlow2
-            return DiceTensorFlow2
-
-        elif model_interface.backend == BackEndTypes.Pytorch:
+        if model_interface.backend == BackEndTypes.Pytorch:
             # PyTorch backend
             from dice_ml.explainer_interfaces.dice_pytorch import DicePyTorch
             return DicePyTorch

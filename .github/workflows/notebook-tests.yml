@@ -32,9 +32,6 @@ jobs:
     - name: Install core dependencies
       run: |
         pip install -r requirements.txt
-    - name: Install deep learning dependencies
-      run: |
-        pip install -r requirements-deeplearning.txt
     - name: Install test dependencies
       run: |
         pip install -r requirements-test.txt

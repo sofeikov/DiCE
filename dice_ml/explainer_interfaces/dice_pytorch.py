@@ -541,7 +541,7 @@ class DicePyTorch(ExplainerBase):
                         self.final_cfs[loop_ix+ix] = copy.deepcopy(self.best_backup_cfs[loop_ix+ix])
                         self.cfs_preds[loop_ix+ix] = copy.deepcopy(self.best_backup_cfs_preds[loop_ix+ix])
 
-        # convert to the format that is consistent with dice_tensorflow
+        # convert to the expected numpy array format
         query_instance = np.array([query_instance], dtype=np.float32)
         for tix in range(max(loop_find_CFs, self.total_CFs)):
             self.final_cfs[tix] = np.array([self.final_cfs[tix]], dtype=np.float32)

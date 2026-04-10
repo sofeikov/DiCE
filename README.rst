@@ -33,7 +33,8 @@ Diverse Counterfactual Explanations (DiCE) for ML
    `interpretml/DiCE <https://github.com/interpretml/DiCE>`_ project.
    The goal of this fork is to bring the project up to date: migrating to
    `uv <https://docs.astral.sh/uv/>`_ for dependency management, upgrading to newer pandas,
-   and removing the TensorFlow backend to focus exclusively on PyTorch as the deep learning framework.
+   removing the TensorFlow backend to focus exclusively on PyTorch as the deep learning framework,
+   and generally modernising the codebase.
 
 *How to explain a machine learning model such that the explanation is truthful to the model and yet interpretable to people?*
 
@@ -82,7 +83,7 @@ To install the latest (dev) version of DiCE and its dependencies, clone this rep
 .. code:: bash
 
     uv sync                          # core dependencies
-    uv sync --extra deeplearning     # include TensorFlow and PyTorch
+    uv sync --extra deeplearning     # include PyTorch
     uv sync --group test             # include test dependencies
     uv sync --group lint             # include linting dependencies
 
@@ -120,7 +121,7 @@ With DiCE, generating explanations is a simple three-step  process: set up a dat
     
     # Pre-trained ML model
     m = dice_ml.Model(model_path=dice_ml.utils.helpers.get_adult_income_modelpath(),
-                      backend='TF2', func="ohe-min-max")
+                      backend='sklearn')
     # DiCE explanation instance
     exp = dice_ml.Dice(d,m)
 
@@ -149,7 +150,7 @@ You can save the generated counterfactual examples in the following way.
 
 For more details, check out the `docs/source/notebooks <https://github.com/interpretml/DiCE/tree/master/docs/source/notebooks>`_ folder. Here are some example notebooks:
 
-* `Getting Started <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_getting_started.ipynb>`_: Generate CF examples for a `sklearn`, `tensorflow` or `pytorch` binary classifier and compute feature importance scores.
+* `Getting Started <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_getting_started.ipynb>`_: Generate CF examples for a `sklearn` or `pytorch` binary classifier and compute feature importance scores.
 * `Explaining Multi-class Classifiers and Regressors
   <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_multiclass_classification_and_regression.ipynb>`_: Generate CF explanations for a multi-class classifier or regressor.
 * `Local and Global Feature Importance <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_feature_importances.ipynb>`_: Estimate local and global feature importance scores using generated counterfactuals.
@@ -197,26 +198,7 @@ DiCE does not need access to the full dataset. It only requires metadata propert
 
 **Model**
 
-We support pre-trained models as well as training a model. Here's a simple example using Tensorflow. 
-
-.. code:: python
-
-    sess = tf.InteractiveSession()
-    # Generating train and test data
-    train, _ = d.split_data(d.normalize_data(d.one_hot_encoded_data))
-    X_train = train.loc[:, train.columns != 'income']
-    y_train = train.loc[:, train.columns == 'income']
-    # Fitting a dense neural network model
-    ann_model = keras.Sequential()
-    ann_model.add(keras.layers.Dense(20, input_shape=(X_train.shape[1],), kernel_regularizer=keras.regularizers.l1(0.001), activation=tf.nn.relu))
-    ann_model.add(keras.layers.Dense(1, activation=tf.nn.sigmoid))
-    ann_model.compile(loss='binary_crossentropy', optimizer=tf.keras.optimizers.Adam(0.01), metrics=['accuracy'])
-    ann_model.fit(X_train, y_train, validation_split=0.20, epochs=100, verbose=0, class_weight={0:1,1:2})
-
-    # Generate the DiCE model for explanation
-    m = model.Model(model=ann_model)
-
-Check out the `Getting Started <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_getting_started.ipynb>`_ notebook to see code examples on using DiCE with sklearn and PyTorch models.
+We support pre-trained models as well as training a model. Check out the `Getting Started <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_getting_started.ipynb>`_ notebook to see code examples on using DiCE with sklearn and PyTorch models.
 
 **Explanations**
 

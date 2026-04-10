@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is DiCE
 
-DiCE (Diverse Counterfactual Explanations) is a Python library for generating counterfactual explanations for ML models. Given a model prediction, it answers "what minimal changes to the input would flip the outcome?" It supports sklearn, TensorFlow 1/2, and PyTorch backends, with multiple CF generation strategies (random sampling, genetic algorithm, KD-tree, gradient-based).
+DiCE (Diverse Counterfactual Explanations) is a Python library for generating counterfactual explanations for ML models. Given a model prediction, it answers "what minimal changes to the input would flip the outcome?" It supports sklearn and PyTorch backends, with multiple CF generation strategies (random sampling, genetic algorithm, KD-tree, gradient-based).
 
 ## Build & Install
 
 ```bash
 uv sync                                        # core deps only
-uv sync --extra deeplearning                   # include tensorflow + torch
+uv sync --extra deeplearning                   # include torch
 uv sync --group test                           # include test deps
 uv sync --group lint                           # include linting deps
 uv sync --extra deeplearning --group test --group lint  # everything
@@ -32,7 +32,7 @@ uv run pytest tests/test_dice_interface/test_dice_random.py -k "test_name"
 uv run pytest tests/ -m "notebook_tests"
 ```
 
-Tests use session/module-scoped fixtures in `tests/conftest.py` that are parametrized over backends (`sklearn`, `PYT`) and data interfaces (`private`, `public`). Many fixtures use `itertools.product` to generate all backend x data-interface combinations.
+Tests use session/module-scoped fixtures in `tests/conftest.py` that are parametrized over backends (`sklearn`, `PYT`) and data interfaces (`private`, `public`).
 
 ## Linting
 
@@ -52,7 +52,7 @@ Users interact through three top-level classes exposed via `dice_ml/__init__.py`
 
 1. **`dice_ml.Data`** — wraps dataset metadata (feature ranges, categorical levels, outcome name). Dispatches to `PublicData` (has a dataframe) or `PrivateData` (metadata-only) via runtime `__class__` reassignment in `decide_implementation_type`.
 
-2. **`dice_ml.Model`** — wraps a trained ML model. Dispatches to backend-specific implementations (`BaseModel` for sklearn, `KerasTensorFlowModel`, `PyTorchModel`) via the same `__class__` reassignment pattern.
+2. **`dice_ml.Model`** — wraps a trained ML model. Dispatches to backend-specific implementations (`BaseModel` for sklearn, `PyTorchModel`) via the same `__class__` reassignment pattern.
 
 3. **`dice_ml.Dice`** — the explainer. Takes Data + Model, dispatches to a method-specific explainer class based on the `method` parameter and model backend.
 
@@ -68,7 +68,7 @@ All three top-level classes use the same pattern: the `__init__` calls `decide_i
 
 Concrete explainers in `explainer_interfaces/`:
 - **Model-agnostic**: `DiceRandom`, `DiceGenetic`, `DiceKD` — work with any backend
-- **Gradient-based**: `DiceTensorFlow1`, `DiceTensorFlow2`, `DicePyTorch` — require differentiable models
+- **Gradient-based**: `DicePyTorch` — requires differentiable models
 - **Feasibility**: `FeasibleBaseVAE`, `FeasibleModelApprox` — VAE-based feasible CF generation
 
 ### Method routing
@@ -77,7 +77,7 @@ Concrete explainers in `explainer_interfaces/`:
 - `"random"` → `DiceRandom` (default for sklearn)
 - `"genetic"` → `DiceGenetic`
 - `"kdtree"` → `DiceKD` (CFs from training data only; requires public data)
-- `"gradient"` → framework-specific (`DiceTensorFlow1/2`, `DicePyTorch`)
+- `"gradient"` → `DicePyTorch`
 
 ### Data interfaces
 
@@ -92,7 +92,7 @@ Concrete explainers in `explainer_interfaces/`:
 
 ### Constants
 
-`dice_ml/constants.py` defines enums: `BackEndTypes` (`sklearn`, `TF1`, `TF2`, `PYT`), `SamplingStrategy` (`random`, `genetic`, `kdtree`, `gradient`), `ModelTypes` (`classifier`, `regressor`).
+`dice_ml/constants.py` defines enums: `BackEndTypes` (`sklearn`, `PYT`), `SamplingStrategy` (`random`, `genetic`, `kdtree`, `gradient`), `ModelTypes` (`classifier`, `regressor`).
 
 ## CI
 

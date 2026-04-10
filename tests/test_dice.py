@@ -27,14 +27,6 @@ class TestBaseExplainerLoader:
         exp = dice_ml.Dice(d, m, method=method)
         return exp
 
-    def test_tf(self):
-        tf = pytest.importorskip("tensorflow")
-        backend = 'TF'+tf.__version__[0]
-        exp = self._get_exp(backend, method="gradient")
-        assert issubclass(type(exp), dice_ml.explainer_interfaces.explainer_base.ExplainerBase)
-        assert isinstance(exp, dice_ml.explainer_interfaces.dice_tensorflow2.DiceTensorFlow2) or \
-            isinstance(exp, dice_ml.explainer_interfaces.dice_tensorflow1.DiceTensorFlow1)
-
     def test_pyt(self):
         pytest.importorskip("torch")
         backend = 'PYT'

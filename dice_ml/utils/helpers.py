@@ -184,9 +184,9 @@ def load_custom_testing_dataset_regression():
     return pd.DataFrame(data, columns=['Categorical', 'Numerical', 'Outcome'])
 
 
-def get_adult_income_modelpath(backend='TF1'):
+def get_adult_income_modelpath(backend='sklearn'):
     pkg_path = dice_ml.__path__[0]
-    model_ext = '.h5' if 'TF' in backend else ('.pth' if backend == 'PYT' else '.pkl')
+    model_ext = '.pth' if backend == 'PYT' else '.pkl'
     modelpath = os.path.join(pkg_path, 'utils', 'sample_trained_models', 'adult'+model_ext)
     return modelpath
 
