@@ -26,6 +26,15 @@
 Diverse Counterfactual Explanations (DiCE) for ML
 ======================================================================
 
+.. note::
+
+   **This is a modernisation fork** of the `original DiCE repository <https://github.com/interpretml/DiCE>`_.
+   All credit goes to the original authors and contributors of the
+   `interpretml/DiCE <https://github.com/interpretml/DiCE>`_ project.
+   The goal of this fork is to bring the project up to date: migrating to
+   `uv <https://docs.astral.sh/uv/>`_ for dependency management, upgrading to newer pandas,
+   and removing the TensorFlow backend to focus exclusively on PyTorch as the deep learning framework.
+
 *How to explain a machine learning model such that the explanation is truthful to the model and yet interpretable to people?*
 
 `Ramaravind K. Mothilal <https://raam93.github.io/>`_, `Amit Sharma <http://www.amitsharma.in/>`_, `Chenhao Tan <https://chenhaot.com/>`_
@@ -56,33 +65,34 @@ Barring simple linear models, however, it is difficult to generate CF examples t
 
 Installing DICE
 -----------------
-DiCE supports Python 3+. The stable version of DiCE is available on `PyPI <https://pypi.org/project/dice-ml/>`_.
+DiCE supports Python 3.9+. The stable version of DiCE is available on `PyPI <https://pypi.org/project/dice-ml/>`_.
 
 .. code:: bash
 
     pip install dice-ml
 
-DiCE is also available on `conda-forge <https://anaconda.org/conda-forge/dice-ml>`_. 
+DiCE is also available on `conda-forge <https://anaconda.org/conda-forge/dice-ml>`_.
 
 .. code:: bash
 
     conda install -c conda-forge dice-ml
 
-To install the latest (dev) version of DiCE and its dependencies, clone this repo and run `pip install` from the top-most folder of the repo:
+To install the latest (dev) version of DiCE and its dependencies, clone this repo and use `uv <https://docs.astral.sh/uv/>`_:
+
+.. code:: bash
+
+    uv sync                          # core dependencies
+    uv sync --extra deeplearning     # include TensorFlow and PyTorch
+    uv sync --group test             # include test dependencies
+    uv sync --group lint             # include linting dependencies
+
+Alternatively, install with pip:
 
 .. code:: bash
 
     pip install -e .
-
-If you face any problems, try installing dependencies manually.
-
-.. code:: bash
-
-    pip install -r requirements.txt
-    # Additional dependendies for deep learning models
-    pip install -r requirements-deeplearning.txt
-    # For running unit tests
-    pip install -r requirements-test.txt
+    # Optional: deep learning backends
+    pip install -e ".[deeplearning]"
 
 
 Getting started with DiCE
