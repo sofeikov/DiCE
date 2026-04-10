@@ -356,7 +356,7 @@ class DiceGenetic(ExplainerBase):
             return yloss
 
         elif self.model.model_type == ModelTypes.Regressor:
-            predicted_value = self.predict_fn(cfs)
+            predicted_value = self.predict_fn(cfs).flatten()
             if self.yloss_type == 'hinge_loss':
                 yloss = np.zeros(len(predicted_value))
                 for i in range(len(predicted_value)):
