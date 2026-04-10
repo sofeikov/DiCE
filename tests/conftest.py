@@ -5,7 +5,9 @@ import pandas as pd
 import pytest
 import torch
 from rai_test_utils.models.sklearn import (
-    create_complex_classification_pipeline, create_complex_regression_pipeline)
+    create_complex_classification_pipeline,
+    create_complex_regression_pipeline,
+)
 
 import dice_ml
 from dice_ml.utils import helpers

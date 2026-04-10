@@ -66,7 +66,7 @@ Barring simple linear models, however, it is difficult to generate CF examples t
 
 Installing DICE
 -----------------
-DiCE supports Python 3.9+. The stable version of DiCE is available on `PyPI <https://pypi.org/project/dice-ml/>`_.
+DiCE supports Python 3.12+. The stable version of DiCE is available on `PyPI <https://pypi.org/project/dice-ml/>`_.
 
 .. code:: bash
 
