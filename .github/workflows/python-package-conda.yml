@@ -24,14 +24,11 @@ jobs:
       run: |
         # $CONDA is an environment variable pointing to the root of the miniconda directory
         echo $CONDA/bin >> $GITHUB_PATH
-    - name: Install core dependencies
+    - name: Install dependencies
       run: |
-        conda env update --file environment.yml --name base
-    - name: Install deep learning dependencies
-      run: |
-        conda env update --file environment-deeplearning.yml --name base
+        conda install python=3.12
+        pip install uv
+        uv sync --extra deeplearning --group test
     - name: Test with pytest
       run: |
-        conda install pytest ipython jupyter nbformat pytest-mock
-
-        pytest
+        uv run pytest tests/ -m "not notebook_tests" --doctest-modules
