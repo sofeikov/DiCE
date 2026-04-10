@@ -39,10 +39,12 @@ Tests use session/module-scoped fixtures in `tests/conftest.py` that are paramet
 ```bash
 uv run isort . -c                  # check import sorting
 uv run isort .                     # fix import sorting
-uv run flake8 . --max-complexity=30 --max-line-length=127
+uv run flake8 . --max-complexity=30  # line length configured in .flake8
 # data_interfaces has stricter complexity limit:
-uv run flake8 dice_ml/data_interfaces/ --max-complexity=10 --max-line-length=127
+uv run flake8 dice_ml/data_interfaces/ --max-complexity=10
 ```
+
+Flake8 config (`.flake8`) sets `max-line-length = 127` and excludes `.venv`, `docs`, `build`, `dist`.
 
 ## Architecture
 
@@ -96,7 +98,8 @@ Concrete explainers in `explainer_interfaces/`:
 
 ## CI
 
-GitHub Actions workflows run on Python 3.9-3.12 across ubuntu/macos/windows:
+GitHub Actions workflows run on Python 3.12-3.13 across ubuntu/macos/windows using `uv`:
 - `python-package.yml` — full test suite
 - `python-linting.yml` — flake8 + isort
 - `notebook-tests.yml` — Jupyter notebook integration tests
+- `python-package-conda.yml` — conda environment test

@@ -5,8 +5,10 @@ import jsonschema
 from raiutils.exceptions import UserConfigValidationException
 
 from dice_ml.constants import _SchemaVersions
-from dice_ml.diverse_counterfactuals import (CounterfactualExamples,
-                                             _DiverseCFV2SchemaConstants)
+from dice_ml.diverse_counterfactuals import (
+    CounterfactualExamples,
+    _DiverseCFV2SchemaConstants,
+)
 
 
 class _CommonSchemaConstants:

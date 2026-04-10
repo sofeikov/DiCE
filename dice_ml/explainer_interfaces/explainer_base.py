@@ -5,7 +5,7 @@
 import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any, List
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -49,7 +49,7 @@ class ExplainerBase(ABC):
         #   [self.data_interface.get_decimal_precisions()[ix] for ix in self.encoded_continuous_feature_indexes]
 
     def _find_features_having_missing_values(
-            self, data: Any) -> List[str]:
+            self, data: Any) -> list[str]:
         """Return list of features which have missing values.
 
         :param data: The dataset to check.
@@ -697,7 +697,8 @@ class ExplainerBase(ABC):
                 target_class = int(1 - original_pred_1)
                 return target_class
             elif num_output_nodes == 1:  # only for pytorch DL model
-                original_pred_1 = np.round(original_pred)
+                original_pred_scalar = original_pred[0] if hasattr(original_pred, "__len__") else original_pred
+                original_pred_1 = np.round(original_pred_scalar)
                 target_class = int(1-original_pred_1)
                 return target_class
             elif num_output_nodes > 2:
@@ -810,7 +811,10 @@ class ExplainerBase(ABC):
                 else:  # 1-D input
                     model_output[i] = np.round(model_scores[i])
             elif self.model.model_type == ModelTypes.Regressor:
-                model_output[i] = model_scores[i]
+                if hasattr(model_scores[i], "shape") and len(model_scores[i].shape) > 0:
+                    model_output[i] = model_scores[i][0]
+                else:
+                    model_output[i] = model_scores[i]
         return model_output
 
     def check_permitted_range(self, permitted_range):

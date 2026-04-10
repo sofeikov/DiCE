@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
-from rai_test_utils.datasets.tabular import (create_housing_data,
-                                             create_iris_data)
+from rai_test_utils.datasets.tabular import create_housing_data, create_iris_data
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 import dice_ml

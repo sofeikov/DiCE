@@ -2,7 +2,6 @@
 
 import collections
 import logging
-import sys
 from collections import defaultdict
 
 import numpy as np
@@ -34,15 +33,12 @@ class PrivateData(_BaseData):
                                Default MAD value is 1 for all features.
         :param data_name (optional): Dataset name
         """
-        if sys.version_info > (3, 6, 0) and isinstance(params['features'], (dict, collections.OrderedDict)):
-            features_dict = params['features']
-        elif sys.version_info <= (3, 6, 0) and isinstance(params['features'], collections.OrderedDict):
+        if isinstance(params['features'], (dict, collections.OrderedDict)):
             features_dict = params['features']
         else:
             raise ValueError(
                 "should provide dictionary with feature names as keys and range"
-                "(for continuous features) or categories (for categorical features) as values. "
-                "For python version <3.6, should provide an OrderedDict")
+                "(for continuous features) or categories (for categorical features) as values.")
 
         self._validate_and_set_outcome_name(params=params)
         self._validate_and_set_type_and_precision(params=params)
