@@ -56,33 +56,34 @@ Barring simple linear models, however, it is difficult to generate CF examples t
 
 Installing DICE
 -----------------
-DiCE supports Python 3+. The stable version of DiCE is available on `PyPI <https://pypi.org/project/dice-ml/>`_.
+DiCE supports Python 3.9+. The stable version of DiCE is available on `PyPI <https://pypi.org/project/dice-ml/>`_.
 
 .. code:: bash
 
     pip install dice-ml
 
-DiCE is also available on `conda-forge <https://anaconda.org/conda-forge/dice-ml>`_. 
+DiCE is also available on `conda-forge <https://anaconda.org/conda-forge/dice-ml>`_.
 
 .. code:: bash
 
     conda install -c conda-forge dice-ml
 
-To install the latest (dev) version of DiCE and its dependencies, clone this repo and run `pip install` from the top-most folder of the repo:
+To install the latest (dev) version of DiCE and its dependencies, clone this repo and use `uv <https://docs.astral.sh/uv/>`_:
+
+.. code:: bash
+
+    uv sync                          # core dependencies
+    uv sync --extra deeplearning     # include TensorFlow and PyTorch
+    uv sync --group test             # include test dependencies
+    uv sync --group lint             # include linting dependencies
+
+Alternatively, install with pip:
 
 .. code:: bash
 
     pip install -e .
-
-If you face any problems, try installing dependencies manually.
-
-.. code:: bash
-
-    pip install -r requirements.txt
-    # Additional dependendies for deep learning models
-    pip install -r requirements-deeplearning.txt
-    # For running unit tests
-    pip install -r requirements-test.txt
+    # Optional: deep learning backends
+    pip install -e ".[deeplearning]"
 
 
 Getting started with DiCE
