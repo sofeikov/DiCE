@@ -55,6 +55,7 @@ lint = [
     "flake8-breakpoint",
     "flake8-builtins",
     "flake8-logging-format",
+    "setuptools",
     "flake8-pytest-style",
     "flake8-all-not-strings",
     "isort",
