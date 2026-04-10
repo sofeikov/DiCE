@@ -1,7 +1,7 @@
 """Module pointing to different implementations of Model class
 
 The implementations contain methods to access the output or gradients of ML models trained based on different
-frameworks such as Tensorflow or PyTorch.
+frameworks such as PyTorch.
 """
 import warnings
 
@@ -12,13 +12,13 @@ from dice_ml.constants import BackEndTypes, ModelTypes
 
 class Model:
     """An interface class to different ML Model implementations."""
-    def __init__(self, model=None, model_path='', backend=BackEndTypes.Tensorflow1, model_type=ModelTypes.Classifier,
+    def __init__(self, model=None, model_path='', backend=BackEndTypes.Sklearn, model_type=ModelTypes.Classifier,
                  func=None, kw_args=None):
         """Init method
 
         :param model: trained ML model.
         :param model_path: path to trained ML model.
-        :param backend: "TF1" ("TF2") for TensorFLow 1.0 (2.0), "PYT" for PyTorch implementations,
+        :param backend: "PYT" for PyTorch implementations,
                         "sklearn" for Scikit-Learn implementations of standard
                         DiCE (https://arxiv.org/pdf/1905.07697.pdf). For all other frameworks and
                         implementations, provide a dictionary with "model" and "explainer" as keys,
@@ -63,16 +63,6 @@ def decide(backend):
         # random sampling of CFs
         from dice_ml.model_interfaces.base_model import BaseModel
         return BaseModel
-
-    elif backend == BackEndTypes.Tensorflow1 or backend == BackEndTypes.Tensorflow2:
-        # Tensorflow 1 or 2 backend
-        try:
-            import tensorflow  # noqa: F401
-        except ImportError:
-            raise UserConfigValidationException("Unable to import tensorflow. Please install tensorflow")
-        from dice_ml.model_interfaces.keras_tensorflow_model import \
-            KerasTensorFlowModel
-        return KerasTensorFlowModel
 
     elif backend == BackEndTypes.Pytorch:
         # PyTorch backend

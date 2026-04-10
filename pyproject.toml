@@ -37,7 +37,6 @@ Download = "https://github.com/interpretml/DiCE/archive/v0.12.tar.gz"
 
 [project.optional-dependencies]
 deeplearning = [
-    "tensorflow>=1.13.1",
     "torch",
 ]
 

@@ -36,22 +36,6 @@ dice\_ml.explainer\_interfaces.dice\_random module
    :undoc-members:
    :show-inheritance:
 
-dice\_ml.explainer\_interfaces.dice\_tensorflow1 module
--------------------------------------------------------
-
-.. automodule:: dice_ml.explainer_interfaces.dice_tensorflow1
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-dice\_ml.explainer\_interfaces.dice\_tensorflow2 module
--------------------------------------------------------
-
-.. automodule:: dice_ml.explainer_interfaces.dice_tensorflow2
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 dice\_ml.explainer\_interfaces.dice\_xgboost module
 ---------------------------------------------------
 

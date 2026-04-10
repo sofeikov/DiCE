@@ -23,7 +23,7 @@ def get_notebook_parameter_list():
     notebooks_list = [f.name for f in os.scandir(NOTEBOOKS_PATH) if f.name.endswith(".ipynb")]
     # notebooks that should not be run
     advanced_notebooks = [
-            "DiCE_with_advanced_options.ipynb",  # requires tensorflow 1.x
+            "DiCE_with_advanced_options.ipynb",  # requires advanced options setup
             "DiCE_getting_started_feasible.ipynb",  # needs changes after latest refactor
             "DiCE_with_private_data.ipynb",  # needs compatible version of sklearn to load model
             "Benchmarking_different_CF_explanation_methods.ipynb"

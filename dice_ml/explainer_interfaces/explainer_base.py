@@ -1,5 +1,5 @@
 """Module containing a template class to generate counterfactual explanations.
-   Subclasses implement interfaces for different ML frameworks such as TensorFlow or PyTorch.
+   Subclasses implement interfaces for different ML frameworks such as PyTorch.
    All methods are in dice_ml.explainer_interfaces"""
 
 import pickle
@@ -770,7 +770,7 @@ class ExplainerBase(ABC):
                     target_cf_class = self.target_cf_class[0][0]
             target_cf_class = int(target_cf_class)
 
-            if len(model_score) == 1:  # for tensorflow/pytorch models
+            if len(model_score) == 1:  # for pytorch models
                 pred_1 = model_score[0]
                 validity = True if \
                     ((target_cf_class == 0 and pred_1 <= self.stopping_threshold) or
