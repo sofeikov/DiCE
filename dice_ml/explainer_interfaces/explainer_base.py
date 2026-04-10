@@ -697,7 +697,8 @@ class ExplainerBase(ABC):
                 target_class = int(1 - original_pred_1)
                 return target_class
             elif num_output_nodes == 1:  # only for pytorch DL model
-                original_pred_1 = np.round(original_pred)
+                original_pred_scalar = original_pred[0] if hasattr(original_pred, "__len__") else original_pred
+                original_pred_1 = np.round(original_pred_scalar)
                 target_class = int(1-original_pred_1)
                 return target_class
             elif num_output_nodes > 2:
