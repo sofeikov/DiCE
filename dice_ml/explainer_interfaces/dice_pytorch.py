@@ -437,10 +437,6 @@ class DicePyTorch(ExplainerBase):
         self.converged = False
 
         self.stopping_threshold = stopping_threshold
-        if self.target_cf_class == 0 and self.stopping_threshold > 0.5:
-            self.stopping_threshold = 0.25
-        elif self.target_cf_class == 1 and self.stopping_threshold < 0.5:
-            self.stopping_threshold = 0.75
 
         # to resolve tie - if multiple levels of an one-hot-encoded categorical variable take value 1
         self.tie_random = tie_random

@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 .omc
+.omx
 
 # C extensions
 *.so

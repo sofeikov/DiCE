@@ -92,12 +92,6 @@ class DiceRandom(ExplainerBase):
         self.total_CFs = total_CFs
 
         self.stopping_threshold = stopping_threshold
-        if self.model.model_type == ModelTypes.Classifier:
-            # TODO Generalize this for multi-class
-            if self.target_cf_class == 0 and self.stopping_threshold > 0.5:
-                self.stopping_threshold = 0.25
-            elif self.target_cf_class == 1 and self.stopping_threshold < 0.5:
-                self.stopping_threshold = 0.75
 
         # get random samples for each feature independently
         start_time = timeit.default_timer()
