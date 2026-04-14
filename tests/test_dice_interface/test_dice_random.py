@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from raiutils.exceptions import UserConfigValidationException
 
@@ -76,6 +77,43 @@ class TestDiceRandomBinaryClassificationMethods:
             assert all(
                 permitted_range[feature][0] <= ans.final_cfs_df[feature].values[i] <= permitted_range[feature][1] for i
                 in range(total_CFs))
+
+    @pytest.mark.parametrize(
+        ("desired_class", "stopping_threshold", "predicted_score"),
+        [(1, 0.4, 0.43), (0, 0.6, 0.57)],
+    )
+    def test_random_respects_user_stopping_threshold_exactly(
+        self,
+        monkeypatch,
+        sample_custom_query_1,
+        desired_class,
+        stopping_threshold,
+        predicted_score,
+    ):
+        negative_score = 1 - predicted_score
+
+        def fake_predict_fn(input_instance):
+            return np.tile(
+                np.array([[negative_score, predicted_score]], dtype=np.float32),
+                (len(input_instance), 1),
+            )
+
+        monkeypatch.setattr(self.exp, "predict_fn", fake_predict_fn)
+
+        counterfactual_examples = self.exp._generate_counterfactuals(
+            query_instance=sample_custom_query_1,
+            total_CFs=1,
+            desired_class=desired_class,
+            stopping_threshold=stopping_threshold,
+            sample_size=10,
+            random_seed=0,
+            posthoc_sparsity_param=0,
+        )
+
+        assert counterfactual_examples.final_cfs_df is not None
+        assert len(counterfactual_examples.final_cfs_df) == 1
+        assert self.exp.stopping_threshold == pytest.approx(stopping_threshold)
+        assert self.exp.cfs_pred_scores[0][1] == pytest.approx(predicted_score, abs=1e-4)
 
 
 class TestDiceRandomStrBinaryClassificationMethods:

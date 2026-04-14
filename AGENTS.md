@@ -1,6 +1,13 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file is the canonical repository guidance for coding agents working in this repository.
+Tool-specific guidance files such as `CLAUDE.md` and `.github/copilot-instructions.md` should defer to this file instead of duplicating instructions.
+
+## Repository Guidance
+
+- For any user-visible behavior change, public API change, bug fix that affects documented behavior, or workflow change, explicitly check whether `README.rst`, source docs, examples, tests, and changelog or release notes need updates before concluding the task.
+- If the repository has no changelog or release-notes file, say that explicitly in the final report instead of inventing one.
+- Prefer updating source documentation over generated files in `docs/`.
 
 ## What is DiCE
 
