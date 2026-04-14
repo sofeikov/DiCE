@@ -670,10 +670,6 @@ class ExplainerBase(ABC):
                 [[self.infer_target_cfs_class(desired_class, test_pred, self.num_output_nodes)]],
                 dtype=np.float32)
             desired_class = int(self.target_cf_class[0][0])
-            if self.target_cf_class == 0 and self.stopping_threshold > 0.5:
-                self.stopping_threshold = 0.25
-            elif self.target_cf_class == 1 and self.stopping_threshold < 0.5:
-                self.stopping_threshold = 0.75
 
         elif self.model.model_type == ModelTypes.Regressor:
             self.target_cf_range = self.infer_target_cfs_range(desired_range)

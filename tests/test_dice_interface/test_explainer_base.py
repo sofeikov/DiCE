@@ -281,6 +281,33 @@ class TestExplainerBaseBinaryClassification:
             assert all(ans.cf_examples_list[0].final_cfs_df_sparse[new_exp.data_interface.outcome_name].values ==
                        [desired_class] * 2)
 
+    @pytest.mark.parametrize(
+        ("desired_class", "stopping_threshold", "model_score"),
+        [(1, 0.4, np.array([0.57, 0.43])), (0, 0.6, np.array([0.43, 0.57]))],
+    )
+    def test_shared_threshold_logic_respects_user_value_exactly(
+            self, desired_class, stopping_threshold, model_score, method,
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface):
+        if method == 'random':
+            pytest.skip('DiceRandom has backend-specific threshold handling')
+
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method=method)
+        exp.num_output_nodes = 2
+
+        exp.misc_init(
+            stopping_threshold=stopping_threshold,
+            desired_class=desired_class,
+            desired_range=None,
+            test_pred=np.array([0.5, 0.5]),
+        )
+
+        assert exp.stopping_threshold == pytest.approx(stopping_threshold)
+        assert exp.is_cf_valid(model_score) is True
+
     @pytest.mark.parametrize(("desired_class", "total_CFs", "permitted_range"),
                              [(1, 1, {'Numerical': [10, 150]})])
     def test_permitted_range(
