@@ -77,3 +77,38 @@ class TestDiceTorchMethods:
         #             [47.0, 'Private', 'Masters', 'Married', 'Service', 'White', 'Female', 73.0, 0.971]]
         # TODO  The model predictions changed after update to posthoc sparsity. Need to investigate.
         # assert dice_exp.final_cfs_df_sparse.values.tolist() == test_cfs
+
+    @pytest.mark.parametrize(
+        ("desired_class", "stopping_threshold", "predicted_score"),
+        [(1, 0.4, 0.43), (0, 0.6, 0.57)],
+    )
+    def test_respects_user_stopping_threshold_exactly(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+        desired_class,
+        stopping_threshold,
+        predicted_score,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        monkeypatch.setattr(
+            self.exp,
+            "predict_fn",
+            lambda _: np.array([predicted_score], dtype=np.float32),
+        )
+        monkeypatch.setattr(self.exp, "stop_loop", lambda *_: True)
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            sample_adultincome_query,
+            total_CFs=1,
+            desired_class=desired_class,
+            stopping_threshold=stopping_threshold,
+            posthoc_sparsity_param=0,
+        )
+
+        final_cfs_df = counterfactual_explanations.cf_examples_list[0].final_cfs_df
+        assert len(final_cfs_df) == 1
+        assert self.exp.stopping_threshold == pytest.approx(stopping_threshold)
+        assert final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == pytest.approx(
+            predicted_score, abs=1e-4
+        )
