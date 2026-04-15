@@ -45,8 +45,8 @@ class DiceRandom(ExplainerBase):
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe.
         :param total_CFs: Total number of counterfactuals required.
         :param desired_range: For regression problems. Contains the outcome range to generate counterfactuals in.
-        :param desired_class: Desired counterfactual class - can take 0 or 1. Default value is "opposite" to the outcome
-                              class of query_instance for binary classification.
+        :param desired_class: Desired counterfactual class. Provide a class index.
+                              "opposite" is supported only for binary classification.
         :param permitted_range: Dictionary with feature names as keys and permitted range in list as values.
                                 Defaults to the range inferred from training data. If None, uses the parameters
                                 initialized in data_interface.

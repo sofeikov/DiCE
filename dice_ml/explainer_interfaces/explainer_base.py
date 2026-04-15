@@ -129,8 +129,8 @@ class ExplainerBase(ABC):
         :param query_instances: Input point(s) for which counterfactuals are to be generated.
                                 This can be a dataframe with one or more rows.
         :param total_CFs: Total number of counterfactuals required.
-        :param desired_class: Desired counterfactual class - can take 0 or 1. Default value
-                              is "opposite" to the outcome class of query_instance for binary classification.
+        :param desired_class: Desired counterfactual class. Provide a class index.
+                              "opposite" is supported only for binary classification.
         :param desired_range: For regression problems. Contains the outcome range to
                               generate counterfactuals in. This should be a list of two numbers in
                               ascending order.
@@ -217,8 +217,8 @@ class ExplainerBase(ABC):
         :param query_instance: Input point for which counterfactuals are to be generated.
                                This can be a dataframe with one row.
         :param total_CFs: Total number of counterfactuals required.
-        :param desired_class: Desired counterfactual class - can take 0 or 1. Default value
-                              is "opposite" to the outcome class of query_instance for binary classification.
+        :param desired_class: Desired counterfactual class. Provide a class index.
+                              "opposite" is supported only for binary classification.
         :param desired_range: For regression problems. Contains the outcome range to
                               generate counterfactuals in.
         :param permitted_range: Dictionary with feature names as keys and permitted range in list as values.
@@ -666,10 +666,8 @@ class ExplainerBase(ABC):
     def misc_init(self, stopping_threshold, desired_class, desired_range, test_pred):
         self.stopping_threshold = stopping_threshold
         if self.model.model_type == ModelTypes.Classifier:
-            self.target_cf_class = np.array(
-                [[self.infer_target_cfs_class(desired_class, test_pred, self.num_output_nodes)]],
-                dtype=np.float32)
-            desired_class = int(self.target_cf_class[0][0])
+            self.target_cf_class = self.infer_target_cfs_class(desired_class, test_pred, self.num_output_nodes)
+            desired_class = self.target_cf_class
 
         elif self.model.model_type == ModelTypes.Regressor:
             self.target_cf_range = self.infer_target_cfs_range(desired_range)
@@ -678,8 +676,6 @@ class ExplainerBase(ABC):
     def infer_target_cfs_class(self, desired_class_input, original_pred, num_output_nodes):
         """ Infer the target class for generating CFs. Only called when
             model_type=="classifier".
-            TODO: Add support for opposite desired class in multiclass.
-            Downstream methods should decide whether it is allowed or not.
         """
         if desired_class_input == "opposite":
             if num_output_nodes == 2:
@@ -703,18 +699,27 @@ class ExplainerBase(ABC):
         elif isinstance(desired_class_input, int):
             if num_output_nodes == 1:   # for DL models
                 if desired_class_input in (0, 1):
-                    target_class = desired_class_input
-                    return target_class
-                else:
-                    raise UserConfigValidationException("Only 0, 1 are supported as desired class for binary classification!")
-            elif desired_class_input >= 0 and desired_class_input < num_output_nodes:
-                target_class = desired_class_input
-                return target_class
-            else:
-                raise UserConfigValidationException("Desired class not present in training data!")
-        else:
-            raise UserConfigValidationException("The target class for {0} could not be identified".format(
-                                                desired_class_input))
+                    return desired_class_input
+                raise UserConfigValidationException("Only 0, 1 are supported as desired class for binary classification!")
+            if desired_class_input >= 0 and desired_class_input < num_output_nodes:
+                return desired_class_input
+            raise UserConfigValidationException("Desired class not present in training data!")
+
+        raise UserConfigValidationException("The target class for {0} could not be identified".format(
+                                            desired_class_input))
+
+    def get_target_class_score(self, model_score):
+        if hasattr(model_score, "shape") and len(model_score.shape) > 1:
+            model_score = model_score[0]
+
+        model_score = np.asarray(model_score, dtype=np.float32).reshape(-1)
+        target_cf_class = self.target_cf_class
+
+        if model_score.size == 1:
+            positive_score = float(model_score[0])
+            return positive_score if target_cf_class == 1 else 1 - positive_score
+
+        return float(model_score[target_cf_class])
 
     def infer_target_cfs_range(self, desired_range_input):
         target_range = None
@@ -732,18 +737,11 @@ class ExplainerBase(ABC):
         for i in range(len(model_outputs)):
             pred = model_outputs[i]
             if self.model.model_type == ModelTypes.Classifier:
-                if self.num_output_nodes in (1, 2):  # binary
-                    if self.num_output_nodes == 2:
-                        pred_1 = pred[self.num_output_nodes-1]
-                    else:
-                        pred_1 = pred[0]
-                    validity[i] = 1 if \
-                        ((self.target_cf_class == 0 and pred_1 <= self.stopping_threshold) or
-                         (self.target_cf_class == 1 and pred_1 >= self.stopping_threshold)) else 0
-
-                else:  # multiclass
-                    if np.argmax(pred) == self.target_cf_class:
-                        validity[i] = 1
+                target_score = self.get_target_class_score(pred)
+                validity[i] = int(
+                    target_score >= self.stopping_threshold or
+                    np.isclose(target_score, self.stopping_threshold)
+                )
             elif self.model.model_type == ModelTypes.Regressor:
                 if self.target_cf_range[0] <= pred <= self.target_cf_range[1]:
                     validity[i] = 1
@@ -759,28 +757,8 @@ class ExplainerBase(ABC):
             model_score = model_score[0]
         # Converting target_cf_class to a scalar (tf/torch have it as (1,1) shape)
         if self.model.model_type == ModelTypes.Classifier:
-            target_cf_class = self.target_cf_class
-            if hasattr(self.target_cf_class, "shape"):
-                if len(self.target_cf_class.shape) == 1:
-                    target_cf_class = self.target_cf_class[0]
-                elif len(self.target_cf_class.shape) == 2:
-                    target_cf_class = self.target_cf_class[0][0]
-            target_cf_class = int(target_cf_class)
-
-            if len(model_score) == 1:  # for pytorch models
-                pred_1 = model_score[0]
-                validity = True if \
-                    ((target_cf_class == 0 and pred_1 <= self.stopping_threshold) or
-                     (target_cf_class == 1 and pred_1 >= self.stopping_threshold)) else False
-                return validity
-            elif len(model_score) == 2:  # binary
-                pred_1 = model_score[1]
-                validity = True if \
-                    ((target_cf_class == 0 and pred_1 <= self.stopping_threshold) or
-                     (target_cf_class == 1 and pred_1 >= self.stopping_threshold)) else False
-                return validity
-            else:  # multiclass
-                return np.argmax(model_score) == target_cf_class
+            target_score = self.get_target_class_score(model_score)
+            return target_score >= self.stopping_threshold or np.isclose(target_score, self.stopping_threshold)
         else:
             return self.target_cf_range[0] <= model_score and model_score <= self.target_cf_range[1]
 

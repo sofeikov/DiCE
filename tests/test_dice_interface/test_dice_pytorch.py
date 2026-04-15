@@ -23,6 +23,9 @@ class TestDiceTorchMethods:
     @pytest.fixture(autouse=True)
     def _initiate_exp_object(self, pyt_exp_object, sample_adultincome_query):
         self.exp = pyt_exp_object  # explainer object
+        self.exp.num_output_nodes = self.exp.model.get_num_output_nodes(
+            len(self.exp.data_interface.ohe_encoded_feature_names)
+        ).shape[1]
         # initialize required params for CF computations
         self.exp.do_cf_initializations(total_CFs=4, algorithm="DiverseCF", features_to_vary="all")
 
@@ -34,14 +37,14 @@ class TestDiceTorchMethods:
                 sample_adultincome_query).iloc[0].to_numpy(dtype=np.float64)
 
         self.exp.initialize_CFs(self.query_instance, init_near_query_instance=True)  # initialize CFs
-        self.exp.target_cf_class = torch.tensor(1).float()  # set desired class to 1
+        self.exp.target_cf_class = 1  # set desired class to 1
 
         # setting random feature weights
         np.random.seed(42)
         weights = np.random.rand(len(self.exp.data_interface.ohe_encoded_feature_names))
         self.exp.feature_weights_list = torch.tensor(weights)
 
-    @pytest.mark.parametrize(("yloss", "output"), [("hinge_loss", 10.8443), ("l2_loss", 0.9999), ("log_loss", 9.8443)])
+    @pytest.mark.parametrize(("yloss", "output"), [("hinge_loss", 10.8252), ("l2_loss", 0.9999), ("log_loss", 9.8253)])
     def test_yloss(self, yloss, output):
         self.exp.yloss_type = yloss
         loss1 = self.exp.compute_yloss()
@@ -79,8 +82,28 @@ class TestDiceTorchMethods:
         # assert dice_exp.final_cfs_df_sparse.values.tolist() == test_cfs
 
     @pytest.mark.parametrize(
-        ("desired_class", "stopping_threshold", "predicted_score"),
-        [(1, 0.4, 0.43), (0, 0.6, 0.57)],
+        ("yloss", "expected_loss"),
+        [("hinge_loss", 1.8473), ("l2_loss", 0.49), ("log_loss", 1.2040)],
+    )
+    def test_multiclass_yloss_uses_requested_class_score(self, monkeypatch, yloss, expected_loss):
+        self.exp.total_CFs = 1
+        self.exp.cfs = [torch.tensor(self.query_instance).float()]
+        self.exp.target_cf_class = 1
+        self.exp.num_output_nodes = 3
+        self.exp.yloss_type = yloss
+
+        monkeypatch.setattr(
+            self.exp,
+            "get_model_output",
+            lambda *args, **kwargs: torch.tensor([0.6, 0.3, 0.1]).float(),
+        )
+
+        loss = self.exp.compute_yloss()
+        assert pytest.approx(loss.data.detach().numpy(), abs=1e-4) == expected_loss
+
+    @pytest.mark.parametrize(
+        ("desired_class", "stopping_threshold", "positive_class_score"),
+        [(1, 0.4, 0.43), (0, 0.6, 0.4)],
     )
     def test_respects_user_stopping_threshold_exactly(
         self,
@@ -88,13 +111,13 @@ class TestDiceTorchMethods:
         sample_adultincome_query,
         desired_class,
         stopping_threshold,
-        predicted_score,
+        positive_class_score,
     ):
         self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
         monkeypatch.setattr(
             self.exp,
             "predict_fn",
-            lambda _: np.array([predicted_score], dtype=np.float32),
+            lambda _: np.array([positive_class_score], dtype=np.float32),
         )
         monkeypatch.setattr(self.exp, "stop_loop", lambda *_: True)
 
@@ -110,5 +133,35 @@ class TestDiceTorchMethods:
         assert len(final_cfs_df) == 1
         assert self.exp.stopping_threshold == pytest.approx(stopping_threshold)
         assert final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == pytest.approx(
-            predicted_score, abs=1e-4
+            positive_class_score, abs=1e-4
         )
+
+    def test_multiclass_output_preserves_predicted_class_semantics(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        original_num_output_nodes = self.exp.num_output_nodes
+        self.exp.num_output_nodes = 3
+        try:
+            monkeypatch.setattr(
+                self.exp,
+                "predict_fn",
+                lambda _: np.array([0.6, 0.3, 0.1], dtype=np.float32),
+            )
+            monkeypatch.setattr(self.exp, "stop_loop", lambda *_: True)
+
+            counterfactual_explanations = self.exp.generate_counterfactuals(
+                sample_adultincome_query,
+                total_CFs=1,
+                desired_class=0,
+                stopping_threshold=0.5,
+                posthoc_sparsity_param=0,
+            )
+
+            final_cfs_df = counterfactual_explanations.cf_examples_list[0].final_cfs_df
+            assert len(final_cfs_df) == 1
+            assert final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == 0
+        finally:
+            self.exp.num_output_nodes = original_num_output_nodes

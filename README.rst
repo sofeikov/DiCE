@@ -136,6 +136,10 @@ example, the following input leads to class 0 (low income) and we would like to 
     # Visualize counterfactual explanation
     dice_exp.visualize_as_dataframe()
 
+For classifiers, ``desired_class`` accepts a target class index.
+``desired_class="opposite"`` is supported only for binary classification; for
+multiclass classification, specify the target class explicitly.
+
 .. image:: https://raw.githubusercontent.com/interpretml/DiCE/master/docs/_static/getting_started_updated.png 
   :width: 400
   :alt: List of counterfactual examples
@@ -174,6 +178,10 @@ See `model-agnostic notebook
 
 * An explicit loss-based method described in `Mothilal et al. (2020) <https://arxiv.org/abs/1905.07697>`_ (Default for deep learning models).
 * A Variational AutoEncoder (VAE)-based method described in `Mahajan et al. (2019) <https://arxiv.org/abs/1912.03277>`_ (see the BaseVAE `notebook <https://github.com/interpretml/DiCE/blob/master/docs/notebooks/DiCE_getting_started_feasible.ipynb>`_).
+
+For supported multiclass explainers, DiCE evaluates validity against the
+requested target class score/probability. Binary classification is handled as
+the two-class edge case of the same target-class API.
 
 The last two methods require a differentiable model, such as a neural network. If you are interested in a specific method, do raise an issue `here <https://github.com/interpretml/DiCE/issues>`_.
 
