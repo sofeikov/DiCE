@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from dice_ml import diverse_counterfactuals as exp
+from dice_ml.constants import ModelTypes
 from dice_ml.explainer_interfaces.explainer_base import ExplainerBase
 
 
@@ -57,8 +58,8 @@ class DicePyTorch(ExplainerBase):
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe
         :param total_CFs: Total number of counterfactuals required.
-        :param desired_class: Desired counterfactual class - can take 0 or 1. Default value is "opposite" to the outcome class
-                              of query_instance for binary classification.
+        :param desired_class: Desired counterfactual class. Provide a class index.
+                              "opposite" is supported only for binary classification.
         :param desired_range: Not supported currently.
         :param proximity_weight: A positive float. Larger this weight, more close the counterfactuals are to the
                                  query_instance.
@@ -125,13 +126,17 @@ class DicePyTorch(ExplainerBase):
                 project_iter, loss_diff_thres, loss_converge_maxiter, verbose, init_near_query_instance,
                 tie_random, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm, limit_steps_ls)
 
+        desired_class_param = desired_class
+        if self.model.model_type == ModelTypes.Classifier:
+            desired_class_param = self.target_cf_class
+
         return exp.CounterfactualExamples(
             data_interface=self.data_interface,
             final_cfs_df=final_cfs_df,
             test_instance_df=test_instance_df,
             final_cfs_df_sparse=final_cfs_df_sparse,
             posthoc_sparsity_param=posthoc_sparsity_param,
-            desired_class=desired_class)
+            desired_class=desired_class_param)
 
     def get_model_output(self, input_instance,
                          transform_data=False, out_tensor=True):
@@ -139,14 +144,28 @@ class DicePyTorch(ExplainerBase):
         return self.model.get_output(
                 input_instance,
                 transform_data=transform_data,
-                out_tensor=out_tensor)[(self.num_output_nodes-1):]
+                out_tensor=out_tensor)
+
+    @staticmethod
+    def _flatten_model_output(model_output):
+        if hasattr(model_output, "shape") and len(model_output.shape) > 1:
+            return model_output[0]
+        return model_output
+
+    def _get_class_scores(self, input_instance):
+        model_output = self._flatten_model_output(self.get_model_output(input_instance))
+        if len(model_output) == 1:
+            positive_score = torch.clamp(model_output[0], min=0.0, max=1.0)
+            return torch.stack((1 - positive_score, positive_score))
+        return model_output
 
     def predict_fn(self, input_instance):
         """prediction function"""
         if not torch.is_tensor(input_instance):
             input_instance = torch.tensor(input_instance).float()
-        return self.get_model_output(
+        model_output = self.get_model_output(
                 input_instance, transform_data=False, out_tensor=False)
+        return np.asarray(self._flatten_model_output(model_output), dtype=np.float32)
 
     def predict_fn_for_sparsity(self, input_instance):
         """prediction function for sparsity correction"""
@@ -231,24 +250,18 @@ class DicePyTorch(ExplainerBase):
     def compute_yloss(self):
         """Computes the first part (y-loss) of the loss function."""
         yloss = 0.0
+        target_cf_class = self.target_cf_class
+        eps = 1e-6
         for i in range(self.total_CFs):
+            class_scores = torch.clamp(self._get_class_scores(self.cfs[i]), min=eps, max=1 - eps)
+            target_score = class_scores[target_cf_class]
             if self.yloss_type == "l2_loss":
-                temp_loss = torch.pow((self.get_model_output(self.cfs[i]) - self.target_cf_class), 2)[0]
+                temp_loss = torch.pow(1 - target_score, 2)
             elif self.yloss_type == "log_loss":
-                temp_logits = torch.log(
-                    (abs(self.get_model_output(self.cfs[i]) - 0.000001)) /
-                    (1 - abs(self.get_model_output(self.cfs[i]) - 0.000001)))
-                criterion = torch.nn.BCEWithLogitsLoss()
-                temp_loss = criterion(temp_logits, torch.tensor([self.target_cf_class]))
+                temp_loss = -torch.log(target_score)
             elif self.yloss_type == "hinge_loss":
-                temp_logits = torch.log(
-                    (abs(self.get_model_output(self.cfs[i]) - 0.000001)) /
-                    (1 - abs(self.get_model_output(self.cfs[i]) - 0.000001)))
-                criterion = torch.nn.ReLU()
-                all_ones = torch.ones_like(self.target_cf_class)
-                labels = 2 * self.target_cf_class - all_ones
-                temp_loss = all_ones - torch.mul(labels, temp_logits)
-                temp_loss = torch.norm(criterion(temp_loss))
+                temp_logit = torch.log(target_score / (1 - target_score))
+                temp_loss = torch.relu(torch.ones_like(temp_logit) - temp_logit)
 
             yloss += temp_loss
 
@@ -399,16 +412,12 @@ class DicePyTorch(ExplainerBase):
                 return False
             else:
                 temp_cfs = self.round_off_cfs(assign=False)
-                test_preds = [self.predict_fn(cf)[0] for cf in temp_cfs]
+                test_preds = [self.predict_fn(cf) for cf in temp_cfs]
 
-                if self.target_cf_class == 0 and all(i <= self.stopping_threshold for i in test_preds):
+                if all(self.is_cf_valid(pred) for pred in test_preds):
                     self.converged = True
                     return True
-                elif self.target_cf_class == 1 and all(i >= self.stopping_threshold for i in test_preds):
-                    self.converged = True
-                    return True
-                else:
-                    return False
+                return False
         else:
             self.loss_converge_iter = 0
             return False
@@ -422,10 +431,10 @@ class DicePyTorch(ExplainerBase):
         self.x1 = torch.tensor(query_instance)
 
         # find the predicted value of query_instance
-        test_pred = self.predict_fn(torch.tensor(query_instance).float())[0]
-        if desired_class == "opposite":
-            desired_class = 1.0 - np.round(test_pred)
-        self.target_cf_class = torch.tensor(desired_class).float()
+        test_pred = self.predict_fn(torch.tensor(query_instance).float())
+        self.target_cf_class = self.infer_target_cfs_class(
+            desired_class, test_pred, self.num_output_nodes
+        )
 
         self.min_iter = min_iter
         self.max_iter = max_iter
@@ -504,9 +513,10 @@ class DicePyTorch(ExplainerBase):
                 temp_cfs_stored = self.round_off_cfs(assign=False)
                 test_preds_stored = [self.predict_fn(cf) for cf in temp_cfs_stored]
 
-                if ((self.target_cf_class == 0 and all(i <= self.stopping_threshold for i in test_preds_stored)) or
-                   (self.target_cf_class == 1 and all(i >= self.stopping_threshold for i in test_preds_stored))):
-                    avg_preds_dist = np.mean([abs(pred[0]-self.stopping_threshold) for pred in test_preds_stored])
+                if all(self.is_cf_valid(pred) for pred in test_preds_stored):
+                    avg_preds_dist = np.mean(
+                        [abs(self.get_target_class_score(pred) - self.stopping_threshold) for pred in test_preds_stored]
+                    )
                     if avg_preds_dist < self.min_dist_from_threshold[loop_ix]:
                         self.min_dist_from_threshold[loop_ix] = avg_preds_dist
                         for ix in range(self.total_CFs):
@@ -529,8 +539,7 @@ class DicePyTorch(ExplainerBase):
         self.cfs_preds = [self.predict_fn(cfs) for cfs in self.final_cfs]
 
         # update final_cfs from backed up CFs if valid CFs are not found
-        if ((self.target_cf_class == 0 and any(i[0] > self.stopping_threshold for i in self.cfs_preds)) or
-           (self.target_cf_class == 1 and any(i[0] < self.stopping_threshold for i in self.cfs_preds))):
+        if any(not self.is_cf_valid(pred) for pred in self.cfs_preds):
             for loop_ix in range(loop_find_CFs):
                 if self.min_dist_from_threshold[loop_ix] != 100:
                     for ix in range(self.total_CFs):
@@ -556,13 +565,17 @@ class DicePyTorch(ExplainerBase):
         final_cfs_df = self.model.transformer.inverse_transform(
                 self.data_interface.get_decoded_data(cfs))
         # rounding off to 3 decimal places
-        cfs_preds = [np.round(preds.flatten().tolist(), 3) for preds in self.cfs_preds]
-        cfs_preds = [item for sublist in cfs_preds for item in sublist]
+        if self.num_output_nodes == 1:
+            cfs_preds = [np.round(np.asarray(preds).reshape(-1)[0], 3) for preds in self.cfs_preds]
+            test_pred_value = np.round(np.asarray(test_pred).reshape(-1)[0], 3)
+        else:
+            cfs_preds = [int(np.argmax(np.asarray(preds).reshape(-1))) for preds in self.cfs_preds]
+            test_pred_value = int(np.argmax(np.asarray(test_pred).reshape(-1)))
         final_cfs_df[self.data_interface.outcome_name] = np.array(cfs_preds)
 
         test_instance_df = self.model.transformer.inverse_transform(
                 self.data_interface.get_decoded_data(query_instance))
-        test_instance_df[self.data_interface.outcome_name] = np.array(np.round(test_pred, 3))
+        test_instance_df[self.data_interface.outcome_name] = np.array([test_pred_value])
 
         # post-hoc operation on continuous features to enhance sparsity - only for public data
         if posthoc_sparsity_param is not None and posthoc_sparsity_param > 0 and 'data_df' in self.data_interface.__dict__:
@@ -576,8 +589,7 @@ class DicePyTorch(ExplainerBase):
             final_cfs_df_sparse = None
 
         m, s = divmod(self.elapsed, 60)
-        if ((self.target_cf_class == 0 and all(i <= self.stopping_threshold for i in self.cfs_preds)) or
-           (self.target_cf_class == 1 and all(i >= self.stopping_threshold for i in self.cfs_preds))):
+        if all(self.is_cf_valid(pred) for pred in self.cfs_preds):
             self.total_CFs_found = max(loop_find_CFs, self.total_CFs)
             valid_ix = [ix for ix in range(max(loop_find_CFs, self.total_CFs))]  # indexes of valid CFs
             print('Diverse Counterfactuals found! total time taken: %02d' %
@@ -586,8 +598,7 @@ class DicePyTorch(ExplainerBase):
             self.total_CFs_found = 0
             valid_ix = []  # indexes of valid CFs
             for cf_ix, pred in enumerate(self.cfs_preds):
-                if ((self.target_cf_class == 0 and pred[0][0] < self.stopping_threshold) or
-                   (self.target_cf_class == 1 and pred[0][0] > self.stopping_threshold)):
+                if self.is_cf_valid(pred):
                     self.total_CFs_found += 1
                     valid_ix.append(cf_ix)
 

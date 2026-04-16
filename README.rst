@@ -177,6 +177,18 @@ See `model-agnostic notebook
 
 The last two methods require a differentiable model, such as a neural network. If you are interested in a specific method, do raise an issue `here <https://github.com/interpretml/DiCE/issues>`_.
 
+Classifier target semantics
+---------------------------
+This fork documents classifier targeting explicitly.
+
+* ``desired_class`` accepts a class index.
+* ``desired_class="opposite"`` is supported only for binary classification.
+* Binary classification is treated as the two-class case of the same target-class API.
+* For randomized sampling, genetic, KD-tree, and PyTorch gradient explainers, counterfactual validity is checked against the requested target-class score/probability and the user-provided ``stopping_threshold``.
+* This differs from original DiCE, which mixes binary-specific threshold checks, threshold coercion in some paths, and argmax-only multiclass validity.
+* Randomized sampling, genetic, and KD-tree explainers keep the returned outcome column as the model-predicted class label/index.
+* The PyTorch gradient explainer keeps its legacy payload shape: binary explanations return the positive-class score, while multiclass explanations return the predicted class index.
+
 Supported use-cases
 -------------------
 **Data**

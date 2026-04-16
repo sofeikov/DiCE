@@ -212,8 +212,8 @@ class DiceGenetic(ExplainerBase):
         :param total_CFs: Total number of counterfactuals required.
         :param initialization: Method to use to initialize the population of the genetic algorithm
         :param desired_range: For regression problems. Contains the outcome range to generate counterfactuals in.
-        :param desired_class: For classification problems. Desired counterfactual class - can take 0 or 1.
-                              Default value is "opposite" to the outcome class of query_instance for binary classification.
+        :param desired_class: For classification problems, the desired counterfactual class. Provide a class
+                              index. "opposite" is supported only for binary classification.
         :param proximity_weight: A positive float. Larger this weight, more close the counterfactuals are to the
                                  query_instance.
         :param sparsity_weight: A positive float. Larger this weight, less features are changed from the query_instance.
@@ -292,7 +292,7 @@ class DiceGenetic(ExplainerBase):
         query_instance_df = self.find_counterfactuals(query_instance, desired_range, desired_class, features_to_vary,
                                                       maxiterations, thresh, verbose)
 
-        desired_class_param = self.decode_model_output(pd.Series(self.target_cf_class[0]))[0] \
+        desired_class_param = self.decode_model_output(pd.Series([self.target_cf_class]))[0] \
             if hasattr(self, 'target_cf_class') else desired_class
         return exp.CounterfactualExamples(data_interface=self.data_interface,
                                           test_instance_df=query_instance_df,

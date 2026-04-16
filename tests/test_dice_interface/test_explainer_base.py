@@ -283,15 +283,12 @@ class TestExplainerBaseBinaryClassification:
 
     @pytest.mark.parametrize(
         ("desired_class", "stopping_threshold", "model_score"),
-        [(1, 0.4, np.array([0.57, 0.43])), (0, 0.6, np.array([0.43, 0.57]))],
+        [(1, 0.4, np.array([0.57, 0.43])), (0, 0.6, np.array([0.6, 0.4]))],
     )
-    def test_shared_threshold_logic_respects_user_value_exactly(
+    def test_shared_threshold_logic_uses_target_class_score(
             self, desired_class, stopping_threshold, model_score, method,
             custom_public_data_interface,
             sklearn_binary_classification_model_interface):
-        if method == 'random':
-            pytest.skip('DiceRandom has backend-specific threshold handling')
-
         exp = dice_ml.Dice(
             custom_public_data_interface,
             sklearn_binary_classification_model_interface,
@@ -446,6 +443,30 @@ class TestExplainerBaseMultiClassClassification:
                 ans.cf_examples_list[0].final_cfs_df_sparse[new_exp.data_interface.outcome_name].values ==
                 [desired_class] * total_CFs)
         assert all(i == desired_class for i in new_exp.cfs_preds)
+
+    @pytest.mark.parametrize(
+        ("desired_class", "stopping_threshold", "model_score", "expected_target_score"),
+        [(1, 0.3, np.array([0.45, 0.35, 0.2]), 0.35)],
+    )
+    def test_multiclass_threshold_logic_uses_requested_class_score(
+            self, desired_class, stopping_threshold, model_score, expected_target_score, method,
+            custom_public_data_interface,
+            sklearn_multiclass_classification_model_interface):
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_multiclass_classification_model_interface,
+            method=method)
+        exp.num_output_nodes = 3
+
+        exp.misc_init(
+            stopping_threshold=stopping_threshold,
+            desired_class=desired_class,
+            desired_range=None,
+            test_pred=np.array([0.2, 0.5, 0.3]),
+        )
+
+        assert exp.get_target_class_score(model_score) == pytest.approx(expected_target_score)
+        assert exp.is_cf_valid(model_score) is True
 
     # When no elements in the desired_class are present in the training data
     @pytest.mark.parametrize(("desired_class", "total_CFs"), [(100, 3), ('opposite', 3)])

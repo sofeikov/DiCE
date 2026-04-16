@@ -56,8 +56,8 @@ class DiceKD(ExplainerBase):
         :param query_instance: A dictionary of feature names and values. Test point of interest.
         :param total_CFs: Total number of counterfactuals required.
         :param desired_range: For regression problems. Contains the outcome range to generate counterfactuals in.
-        :param desired_class: Desired counterfactual class - can take 0 or 1. Default value is "opposite" to the
-                              outcome class of query_instance for binary classification.
+        :param desired_class: Desired counterfactual class. Provide a class index.
+                              "opposite" is supported only for binary classification.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param permitted_range: Dictionary with continuous feature names as keys and permitted min-max range in
                                 list as values. Defaults to the range inferred from training data.
@@ -95,13 +95,6 @@ class DiceKD(ExplainerBase):
         query_instance[self.data_interface.outcome_name] = self.get_model_output_from_scores(test_pred)
         desired_class = self.misc_init(stopping_threshold, desired_class, desired_range, test_pred[0])
 
-        if desired_class == "opposite" and self.model.model_type == ModelTypes.Classifier:
-            if self.num_output_nodes == 2:
-                desired_class = 1.0 - test_pred
-
-            elif self.num_output_nodes > 2:
-                raise ValueError("Desired class can't be opposite if the number of classes is more than 2.")
-
         if isinstance(desired_class, int) and desired_class > self.num_output_nodes - 1:
             raise ValueError("Desired class should be within 0 and num_classes-1.")
 
@@ -127,7 +120,7 @@ class DiceKD(ExplainerBase):
         # decoding to original label
         query_instance, self.final_cfs_df, self.final_cfs_df_sparse = \
             self.decode_to_original_labels(query_instance, self.final_cfs_df, self.final_cfs_df_sparse)
-        desired_class_param = self.decode_model_output(pd.Series(self.target_cf_class[0]))[0] \
+        desired_class_param = self.decode_model_output(pd.Series([self.target_cf_class]))[0] \
             if hasattr(self, 'target_cf_class') else desired_class
         return exp.CounterfactualExamples(data_interface=self.data_interface,
                                           final_cfs_df=self.final_cfs_df,
