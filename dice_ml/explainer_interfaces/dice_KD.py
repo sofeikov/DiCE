@@ -50,9 +50,9 @@ class DiceKD(ExplainerBase):
     def _generate_counterfactuals(self, query_instance, total_CFs, desired_range=None, desired_class="opposite",
                                   features_to_vary="all",
                                   permitted_range=None, sparsity_weight=1,
-                                  feature_weights="inverse_mad", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
+                                  feature_weights="inverse_mad", stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", verbose=False, limit_steps_ls=10000,
-                                  best_effort=False):
+                                  best_effort=False, desired_class_probability_delta=None):
         """Generates diverse counterfactual explanations
 
         :param query_instance: A dictionary of feature names and values. Test point of interest.
@@ -70,6 +70,7 @@ class DiceKD(ExplainerBase):
                                 feature is the inverse of the Median Absolute Devidation (MAD) of the feature's
                                 values in the training set; the weight for a categorical feature is equal to 1 by default.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
+                                   Defaults to 0.5 when not provided.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
                                            Prefer binary search when a feature range is large (for instance, income
@@ -80,6 +81,10 @@ class DiceKD(ExplainerBase):
         :param best_effort: When True, returns the nearest desired-class training points even when strict feature
                             constraints prevent enough exact matches. Returned metadata indicates whether the target
                             goal and the feature constraints were both satisfied.
+        :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
+                                                DiCE resolves the effective target threshold per query as the current
+                                                desired-class score plus this delta. Classification only; cannot be
+                                                combined with ``stopping_threshold``.
 
         :return: A CounterfactualExamples object to store and visualize the resulting counterfactual explanations
                  (see diverse_counterfactuals.py).
@@ -101,7 +106,13 @@ class DiceKD(ExplainerBase):
         # find the predicted value of query_instance
         test_pred = self.predict_fn_scores(query_instance)
         query_instance[self.data_interface.outcome_name] = self.get_model_output_from_scores(test_pred)
-        desired_class = self.misc_init(stopping_threshold, desired_class, desired_range, test_pred[0])
+        desired_class = self.misc_init(
+            stopping_threshold,
+            desired_class,
+            desired_range,
+            test_pred[0],
+            desired_class_probability_delta=desired_class_probability_delta,
+        )
 
         if isinstance(desired_class, int) and desired_class > self.num_output_nodes - 1:
             raise ValueError("Desired class should be within 0 and num_classes-1.")

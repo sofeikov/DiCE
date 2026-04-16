@@ -185,6 +185,9 @@ This fork documents classifier targeting explicitly.
 * ``desired_class="opposite"`` is supported only for binary classification.
 * Binary classification is treated as the two-class case of the same target-class API.
 * For randomized sampling, genetic, KD-tree, and PyTorch gradient explainers, counterfactual validity is checked against the requested target-class score/probability and the user-provided ``stopping_threshold``.
+* ``desired_class_probability_delta`` lets callers request a relative uplift for the desired-class probability/score instead of an absolute threshold. DiCE resolves the effective target as ``current desired-class score + desired_class_probability_delta`` for each query instance, and caps it at ``1.0`` with a warning when needed.
+* ``desired_class_probability_delta`` is supported only for classification tasks and cannot be combined with ``stopping_threshold``.
+* A relative uplift target does not guarantee a class flip on its own. For binary classification, use a large enough delta or an absolute ``stopping_threshold`` above ``0.5`` when the decision boundary itself matters.
 * This differs from original DiCE, which mixes binary-specific threshold checks, threshold coercion in some paths, and argmax-only multiclass validity.
 * Randomized sampling, genetic, and KD-tree explainers keep the returned outcome column as the model-predicted class label/index.
 * The PyTorch gradient explainer keeps its legacy payload shape: binary explanations return the positive-class score, while multiclass explanations return the predicted class index.
@@ -235,6 +238,16 @@ different kinds of explanations.
     dice_exp = exp.generate_counterfactuals(query_instance,
                     total_CFs=4, desired_class="opposite",
                     proximity_weight=1.5, diversity_weight=1.0)
+
+DiCE also supports relative uplift targets for classification probabilities
+when you want to ask for an increase such as ``+7%`` in the desired outcome
+score without manually converting that request into an absolute threshold.
+
+.. code:: python
+
+    dice_exp = exp.generate_counterfactuals(query_instance,
+                    total_CFs=4, desired_class="opposite",
+                    desired_class_probability_delta=0.07)
 
 Additionally, it may be the case that some features are harder to change than
 others (e.g., education level is harder to change than working hours per week). DiCE allows input of relative difficulty in changing a feature through specifying *feature weights*. A higher feature weight means that the feature is harder to change than others. For instance, one way is to use the mean absolute deviation from the median as a measure of relative difficulty of changing a continuous feature. By default, DiCE computes this internally and divides the distance between continuous features by the MAD of the feature's values in the training set. We can also assign different values through the *feature_weights* parameter. 

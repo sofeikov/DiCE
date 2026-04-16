@@ -1,4 +1,5 @@
 import re
+from types import MethodType
 
 import numpy as np
 import pandas as pd
@@ -304,6 +305,117 @@ class TestExplainerBaseBinaryClassification:
 
         assert exp.stopping_threshold == pytest.approx(stopping_threshold)
         assert exp.is_cf_valid(model_score) is True
+
+    @pytest.mark.parametrize(
+        ("desired_class", "desired_class_probability_delta", "test_pred", "model_score", "expected_threshold"),
+        [
+            (1, 0.07, np.array([0.64, 0.36]), np.array([0.57, 0.43]), 0.43),
+            (0, 0.2, np.array([0.6, 0.4]), np.array([0.8, 0.2]), 0.8),
+        ],
+    )
+    def test_shared_threshold_logic_resolves_desired_class_probability_delta(
+            self, desired_class, desired_class_probability_delta, test_pred, model_score, expected_threshold, method,
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface):
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method=method)
+        exp.num_output_nodes = 2
+
+        exp.misc_init(
+            stopping_threshold=None,
+            desired_class=desired_class,
+            desired_range=None,
+            test_pred=test_pred,
+            desired_class_probability_delta=desired_class_probability_delta,
+        )
+
+        assert exp.stopping_threshold == pytest.approx(expected_threshold)
+        assert exp.is_cf_valid(model_score)
+
+    def test_shared_threshold_logic_caps_desired_class_probability_delta_at_one(
+            self, method, custom_public_data_interface, sklearn_binary_classification_model_interface):
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method=method)
+        exp.num_output_nodes = 2
+
+        with pytest.warns(
+                UserWarning,
+                match=r'Capping the resolved stopping_threshold at 1.0'):
+            exp.misc_init(
+                stopping_threshold=None,
+                desired_class=1,
+                desired_range=None,
+                test_pred=np.array([0.02, 0.98]),
+                desired_class_probability_delta=0.07,
+            )
+
+        assert exp.stopping_threshold == pytest.approx(1.0)
+
+    def test_generate_counterfactuals_preserves_legacy_explainer_signature(
+            self, method, sample_custom_query_1, custom_public_data_interface,
+            sklearn_binary_classification_model_interface):
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method='random')
+        captured = {}
+
+        def legacy_generate_counterfactuals(
+                self, query_instance, total_CFs, desired_class="opposite", desired_range=None,
+                permitted_range=None, features_to_vary="all", stopping_threshold=0.5,
+                posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear", verbose=False):
+            captured["stopping_threshold"] = stopping_threshold
+            test_instance_df = query_instance.copy()
+            test_instance_df[self.data_interface.outcome_name] = [1]
+            final_cfs_df = test_instance_df.copy()
+            return CounterfactualExamples(
+                data_interface=self.data_interface,
+                test_instance_df=test_instance_df,
+                final_cfs_df=final_cfs_df,
+                final_cfs_df_sparse=final_cfs_df,
+                desired_class=1,
+            )
+
+        exp._generate_counterfactuals = MethodType(legacy_generate_counterfactuals, exp)
+
+        counterfactual_explanations = exp.generate_counterfactuals(
+            query_instances=sample_custom_query_1,
+            total_CFs=1,
+            desired_class=1,
+        )
+
+        assert counterfactual_explanations.cf_examples_list[0].final_cfs_df is not None
+        assert captured["stopping_threshold"] == pytest.approx(0.5)
+
+    def test_generate_counterfactuals_rejects_delta_for_legacy_explainer(
+            self, method, sample_custom_query_1, custom_public_data_interface,
+            sklearn_binary_classification_model_interface):
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method='random')
+
+        def legacy_generate_counterfactuals(
+                self, query_instance, total_CFs, desired_class="opposite", desired_range=None,
+                permitted_range=None, features_to_vary="all", stopping_threshold=0.5,
+                posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear", verbose=False):
+            raise AssertionError("legacy explainer should not be invoked when delta is unsupported")
+
+        exp._generate_counterfactuals = MethodType(legacy_generate_counterfactuals, exp)
+
+        with pytest.raises(
+                UserConfigValidationException,
+                match=r'The desired_class_probability_delta parameter is not supported by this explainer implementation.'):
+            exp.generate_counterfactuals(
+                query_instances=sample_custom_query_1,
+                total_CFs=1,
+                desired_class=1,
+                desired_class_probability_delta=0.07,
+            )
 
     @pytest.mark.parametrize(("desired_class", "total_CFs", "permitted_range"),
                              [(1, 1, {'Numerical': [10, 150]})])
@@ -673,6 +785,19 @@ class TestExplainerBaseUserConfigValidations:
 
         with pytest.raises(
                 UserConfigValidationException,
+                match=r'The desired_class_probability_delta should lie between 0.0 and 1.0'):
+            explainer_function(query_instances=sample_custom_query_2,
+                               total_CFs=10, desired_class_probability_delta=-0.1)
+
+        with pytest.raises(
+                UserConfigValidationException,
+                match=r'The desired_class_probability_delta parameter cannot be combined with stopping_threshold.'):
+            explainer_function(query_instances=sample_custom_query_2,
+                               total_CFs=10, stopping_threshold=0.6,
+                               desired_class_probability_delta=0.1)
+
+        with pytest.raises(
+                UserConfigValidationException,
                 match=r'Some features need to be varied for generating counterfactuals.'):
             explainer_function(query_instances=sample_custom_query_2,
                                total_CFs=10, features_to_vary=[])
@@ -689,6 +814,13 @@ class TestExplainerBaseUserConfigValidations:
                 match=r'The desired_range parameter should be set for regression task'):
             explainer_function(query_instances=sample_custom_query_1,
                                total_CFs=10)
+
+        with pytest.raises(
+                UserConfigValidationException,
+                match=r'The desired_class_probability_delta parameter should not be set for regression task'):
+            explainer_function(query_instances=sample_custom_query_1,
+                               total_CFs=10, desired_range=[1, 2.8],
+                               desired_class_probability_delta=0.1)
 
         with pytest.raises(
                 UserConfigValidationException,

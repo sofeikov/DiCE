@@ -2,9 +2,12 @@
    Subclasses implement interfaces for different ML frameworks such as PyTorch.
    All methods are in dice_ml.explainer_interfaces"""
 
+import inspect
 import pickle
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from numbers import Real
 from typing import Any
 
 import numpy as np
@@ -18,6 +21,7 @@ from dice_ml.counterfactual_explanations import CounterfactualExplanations
 
 
 class ExplainerBase(ABC):
+    DEFAULT_STOPPING_THRESHOLD = 0.5
 
     def __init__(self, data_interface, model_interface=None):
         """Init method
@@ -70,8 +74,9 @@ class ExplainerBase(ABC):
             self, query_instances, total_CFs,
             desired_class="opposite", desired_range=None,
             permitted_range=None, features_to_vary="all",
-            stopping_threshold=0.5, posthoc_sparsity_param=0.1,
-            posthoc_sparsity_algorithm="linear", verbose=False, **kwargs):
+            stopping_threshold=None, posthoc_sparsity_param=0.1,
+            posthoc_sparsity_algorithm="linear", verbose=False,
+            desired_class_probability_delta=None, **kwargs):
 
         if len(self._find_features_having_missing_values(query_instances)) > 0:
             raise UserConfigValidationException(
@@ -93,9 +98,7 @@ class ExplainerBase(ABC):
                     ' or '.join(_PostHocSparsityTypes.ALL), posthoc_sparsity_algorithm)
                 )
 
-        if stopping_threshold < 0.0 or stopping_threshold > 1.0:
-            raise UserConfigValidationException('The stopping_threshold should lie between {0} and {1}'.format(
-                str(0.0), str(1.0)))
+        self._validate_probability_parameter(stopping_threshold, "stopping_threshold")
 
         if posthoc_sparsity_param is not None and (posthoc_sparsity_param < 0.0 or posthoc_sparsity_param > 1.0):
             raise UserConfigValidationException('The posthoc_sparsity_param should lie between {0} and {1}'.format(
@@ -105,11 +108,19 @@ class ExplainerBase(ABC):
             if desired_range is not None:
                 raise UserConfigValidationException(
                     'The desired_range parameter should not be set for classification task')
+            self._validate_desired_class_probability_delta(
+                desired_class_probability_delta=desired_class_probability_delta,
+                stopping_threshold=stopping_threshold,
+            )
 
         if self.model is not None and self.model.model_type == ModelTypes.Regressor:
             if desired_range is None:
                 raise UserConfigValidationException(
                     'The desired_range parameter should be set for regression task')
+            if desired_class_probability_delta is not None:
+                raise UserConfigValidationException(
+                    'The desired_class_probability_delta parameter should not be set for regression task'
+                )
 
         if desired_range is not None:
             if len(desired_range) != 2:
@@ -119,11 +130,110 @@ class ExplainerBase(ABC):
                 raise UserConfigValidationException(
                     "The range provided in desired_range should be in ascending order.")
 
+    def _validate_probability_parameter(self, parameter_value, parameter_name):
+        if parameter_value is None:
+            return
+
+        if isinstance(parameter_value, bool) or not isinstance(parameter_value, Real) or \
+                parameter_value < 0.0 or parameter_value > 1.0:
+            raise UserConfigValidationException(
+                'The {0} should lie between {1} and {2}'.format(parameter_name, str(0.0), str(1.0))
+            )
+
+    def _validate_desired_class_probability_delta(self, desired_class_probability_delta, stopping_threshold):
+        if desired_class_probability_delta is None:
+            return
+
+        self._validate_probability_parameter(
+            desired_class_probability_delta,
+            "desired_class_probability_delta",
+        )
+
+        if stopping_threshold is not None:
+            raise UserConfigValidationException(
+                "The desired_class_probability_delta parameter cannot be combined with stopping_threshold."
+            )
+
+    def _resolve_requested_stopping_threshold(self, stopping_threshold):
+        self._validate_probability_parameter(stopping_threshold, "stopping_threshold")
+        if stopping_threshold is None:
+            return float(self.DEFAULT_STOPPING_THRESHOLD)
+        return float(stopping_threshold)
+
+    def _resolve_target_class_stopping_threshold(
+            self, stopping_threshold, desired_class_probability_delta, test_pred):
+        self.desired_class_probability_delta = None
+
+        if desired_class_probability_delta is None:
+            return self._resolve_requested_stopping_threshold(stopping_threshold)
+
+        self._validate_desired_class_probability_delta(
+            desired_class_probability_delta=desired_class_probability_delta,
+            stopping_threshold=stopping_threshold,
+        )
+
+        target_score = self.get_target_class_score(test_pred)
+        resolved_stopping_threshold = target_score + float(desired_class_probability_delta)
+
+        if resolved_stopping_threshold > 1.0 and not np.isclose(resolved_stopping_threshold, 1.0):
+            warnings.warn(
+                "The desired_class_probability_delta of {0} would require a target class probability above 1.0 "
+                "for this query instance. Capping the resolved stopping_threshold at 1.0.".format(
+                    desired_class_probability_delta
+                ),
+                stacklevel=2,
+            )
+
+        self.desired_class_probability_delta = float(desired_class_probability_delta)
+        return min(float(resolved_stopping_threshold), 1.0)
+
+    def _explainer_supports_argument(self, explainer_method_name, argument_name):
+        explainer_method = getattr(self, explainer_method_name)
+        explainer_signature = inspect.signature(explainer_method)
+        if argument_name in explainer_signature.parameters:
+            return True
+
+        return any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in explainer_signature.parameters.values()
+        )
+
+    def _invoke_generate_counterfactuals(
+            self, query_instance, total_CFs, desired_class, desired_range, permitted_range,
+            features_to_vary, stopping_threshold, posthoc_sparsity_param,
+            posthoc_sparsity_algorithm, verbose, desired_class_probability_delta, **kwargs):
+        explainer_kwargs = {
+            "desired_class": desired_class,
+            "desired_range": desired_range,
+            "permitted_range": permitted_range,
+            "features_to_vary": features_to_vary,
+            "stopping_threshold": self._resolve_requested_stopping_threshold(stopping_threshold),
+            "posthoc_sparsity_param": posthoc_sparsity_param,
+            "posthoc_sparsity_algorithm": posthoc_sparsity_algorithm,
+            "verbose": verbose,
+            **kwargs,
+        }
+
+        if desired_class_probability_delta is not None:
+            if not self._explainer_supports_argument("_generate_counterfactuals", "desired_class_probability_delta"):
+                raise UserConfigValidationException(
+                    "The desired_class_probability_delta parameter is not supported by this explainer implementation."
+                )
+            explainer_kwargs["desired_class_probability_delta"] = desired_class_probability_delta
+            explainer_kwargs["stopping_threshold"] = stopping_threshold
+
+        return self._generate_counterfactuals(
+            query_instance,
+            total_CFs,
+            **explainer_kwargs
+        )
+
     def generate_counterfactuals(self, query_instances, total_CFs,
                                  desired_class="opposite", desired_range=None,
                                  permitted_range=None, features_to_vary="all",
-                                 stopping_threshold=0.5, posthoc_sparsity_param=0.1,
-                                 posthoc_sparsity_algorithm="linear", verbose=False, **kwargs):
+                                 stopping_threshold=None, posthoc_sparsity_param=0.1,
+                                 posthoc_sparsity_algorithm="linear", verbose=False,
+                                 desired_class_probability_delta=None, **kwargs):
         """General method for generating counterfactuals.
 
         :param query_instances: Input point(s) for which counterfactuals are to be generated.
@@ -139,6 +249,11 @@ class ExplainerBase(ABC):
                                 If None, uses the parameters initialized in data_interface.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
+                                   Defaults to 0.5 when not provided.
+        :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
+                                                DiCE resolves the effective target threshold per query as the current
+                                                desired-class score plus this delta. Classification only; cannot be
+                                                combined with ``stopping_threshold``.
         :param proximity_weight: A positive float. Larger this weight, more close the counterfactuals are to the
                                  query_instance. Used by ['genetic', 'gradientdescent'],
                                  ignored by ['random', 'kdtree'] methods.
@@ -172,6 +287,7 @@ class ExplainerBase(ABC):
             permitted_range=permitted_range, features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm, verbose=verbose,
+            desired_class_probability_delta=desired_class_probability_delta,
             kwargs=kwargs
         )
 
@@ -184,8 +300,9 @@ class ExplainerBase(ABC):
             query_instances_list = query_instances
         for query_instance in tqdm(query_instances_list):
             self.data_interface.set_continuous_feature_indexes(query_instance)
-            res = self._generate_counterfactuals(
-                query_instance, total_CFs,
+            res = self._invoke_generate_counterfactuals(
+                query_instance=query_instance,
+                total_CFs=total_CFs,
                 desired_class=desired_class,
                 desired_range=desired_range,
                 permitted_range=permitted_range,
@@ -194,7 +311,9 @@ class ExplainerBase(ABC):
                 posthoc_sparsity_param=posthoc_sparsity_param,
                 posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
                 verbose=verbose,
-                **kwargs)
+                desired_class_probability_delta=desired_class_probability_delta,
+                **kwargs
+            )
             res.test_instance_df = self.data_interface.ensure_consistent_type(
                     res.test_instance_df, query_instance)
             if res.final_cfs_df is not None and len(res.final_cfs_df) > 0:
@@ -212,8 +331,9 @@ class ExplainerBase(ABC):
     def _generate_counterfactuals(self, query_instance, total_CFs,
                                   desired_class="opposite", desired_range=None,
                                   permitted_range=None, features_to_vary="all",
-                                  stopping_threshold=0.5, posthoc_sparsity_param=0.1,
-                                  posthoc_sparsity_algorithm="linear", verbose=False, **kwargs):
+                                  stopping_threshold=None, posthoc_sparsity_param=0.1,
+                                  posthoc_sparsity_algorithm="linear", verbose=False,
+                                  desired_class_probability_delta=None, **kwargs):
         """Internal method for generating counterfactuals for a given query instance. Any explainerclass
            inherting from this class would need to implement this abstract method.
 
@@ -229,6 +349,11 @@ class ExplainerBase(ABC):
                                 If None, uses the parameters initialized in data_interface.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
+                                   Defaults to 0.5 when not provided.
+        :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
+                                                DiCE resolves the effective target threshold per query as the current
+                                                desired-class score plus this delta. Classification only; cannot be
+                                                combined with ``stopping_threshold``.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
                                            Prefer binary search when a feature range is large (for instance,
@@ -284,9 +409,9 @@ class ExplainerBase(ABC):
     def local_feature_importance(self, query_instances, cf_examples_list=None,
                                  total_CFs=10,
                                  desired_class="opposite", desired_range=None, permitted_range=None,
-                                 features_to_vary="all", stopping_threshold=0.5,
+                                 features_to_vary="all", stopping_threshold=None,
                                  posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
-                                 **kwargs):
+                                 desired_class_probability_delta=None, **kwargs):
         """ Estimate local feature importance scores for the given inputs.
 
         :param query_instances: A list of inputs for which to compute the
@@ -311,6 +436,7 @@ class ExplainerBase(ABC):
             permitted_range=permitted_range, features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
+            desired_class_probability_delta=desired_class_probability_delta,
             kwargs=kwargs
         )
         if cf_examples_list is not None:
@@ -336,15 +462,16 @@ class ExplainerBase(ABC):
             stopping_threshold=stopping_threshold,
             posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
+            desired_class_probability_delta=desired_class_probability_delta,
             **kwargs)
         return importances
 
     def global_feature_importance(self, query_instances, cf_examples_list=None,
                                   total_CFs=10, local_importance=True,
                                   desired_class="opposite", desired_range=None, permitted_range=None,
-                                  features_to_vary="all", stopping_threshold=0.5,
+                                  features_to_vary="all", stopping_threshold=None,
                                   posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
-                                  **kwargs):
+                                  desired_class_probability_delta=None, **kwargs):
         """ Estimate global feature importance scores for the given inputs.
 
         :param query_instances: A list of inputs for which to compute the
@@ -370,6 +497,7 @@ class ExplainerBase(ABC):
             permitted_range=permitted_range, features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
+            desired_class_probability_delta=desired_class_probability_delta,
             kwargs=kwargs
         )
         if query_instances is not None and len(query_instances) < 10:
@@ -405,14 +533,16 @@ class ExplainerBase(ABC):
             stopping_threshold=stopping_threshold,
             posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
+            desired_class_probability_delta=desired_class_probability_delta,
             **kwargs)
         return importances
 
     def feature_importance(self, query_instances, cf_examples_list=None,
                            total_CFs=10, local_importance=True, global_importance=True,
                            desired_class="opposite", desired_range=None,
-                           permitted_range=None, features_to_vary="all", stopping_threshold=0.5,
-                           posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear", **kwargs):
+                           permitted_range=None, features_to_vary="all", stopping_threshold=None,
+                           posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
+                           desired_class_probability_delta=None, **kwargs):
         """ Estimate feature importance scores for the given inputs.
 
         :param query_instances: A list of inputs for which to compute the
@@ -436,6 +566,7 @@ class ExplainerBase(ABC):
             permitted_range=permitted_range, features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
+            desired_class_probability_delta=desired_class_probability_delta,
             kwargs=kwargs
         )
         if cf_examples_list is None:
@@ -448,6 +579,7 @@ class ExplainerBase(ABC):
                 stopping_threshold=stopping_threshold,
                 posthoc_sparsity_param=posthoc_sparsity_param,
                 posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
+                desired_class_probability_delta=desired_class_probability_delta,
                 **kwargs).cf_examples_list
         allcols = self.data_interface.categorical_feature_names + self.data_interface.continuous_feature_names
         summary_importance = None
@@ -666,13 +798,25 @@ class ExplainerBase(ABC):
 
         return final_cfs_sparse
 
-    def misc_init(self, stopping_threshold, desired_class, desired_range, test_pred):
-        self.stopping_threshold = stopping_threshold
+    def misc_init(
+            self, stopping_threshold, desired_class, desired_range, test_pred,
+            desired_class_probability_delta=None):
+        self.stopping_threshold = self._resolve_requested_stopping_threshold(stopping_threshold)
         if self.model.model_type == ModelTypes.Classifier:
             self.target_cf_class = self.infer_target_cfs_class(desired_class, test_pred, self.num_output_nodes)
+            self.stopping_threshold = self._resolve_target_class_stopping_threshold(
+                stopping_threshold=stopping_threshold,
+                desired_class_probability_delta=desired_class_probability_delta,
+                test_pred=test_pred,
+            )
             desired_class = self.target_cf_class
 
         elif self.model.model_type == ModelTypes.Regressor:
+            if desired_class_probability_delta is not None:
+                raise UserConfigValidationException(
+                    'The desired_class_probability_delta parameter should not be set for regression task'
+                )
+            self.desired_class_probability_delta = None
             self.target_cf_range = self.infer_target_cfs_range(desired_range)
         return desired_class
 
@@ -808,6 +952,8 @@ class ExplainerBase(ABC):
             ]
             metadata["stopping_threshold"] = float(self.stopping_threshold)
             metadata["target_class"] = int(self.target_cf_class)
+            if getattr(self, "desired_class_probability_delta", None) is not None:
+                metadata["desired_class_probability_delta"] = float(self.desired_class_probability_delta)
         else:
             metadata["counterfactual_outcomes"] = [
                 self._get_regression_model_output(score) for score in model_scores
