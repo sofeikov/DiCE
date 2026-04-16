@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from raiutils.exceptions import UserConfigValidationException
 
 import dice_ml
 from dice_ml.counterfactual_explanations import CounterfactualExplanations
@@ -130,10 +131,18 @@ class TestDiceTorchMethods:
         )
 
         final_cfs_df = counterfactual_explanations.cf_examples_list[0].final_cfs_df
+        cf_metadata = counterfactual_explanations.cf_examples_list[0].metadata
         assert len(final_cfs_df) == 1
         assert self.exp.stopping_threshold == pytest.approx(stopping_threshold)
         assert final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == pytest.approx(
             positive_class_score, abs=1e-4
+        )
+        assert cf_metadata["best_effort_enabled"] is False
+        assert cf_metadata["counterfactual_is_valid"] == [True]
+        assert cf_metadata["counterfactual_status"] == ["valid"]
+        assert cf_metadata["counterfactual_target_scores"] == pytest.approx(
+            [self.exp.get_target_class_score(np.array([positive_class_score], dtype=np.float32))],
+            abs=1e-4,
         )
 
     def test_multiclass_output_preserves_predicted_class_semantics(
@@ -165,3 +174,65 @@ class TestDiceTorchMethods:
             assert final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == 0
         finally:
             self.exp.num_output_nodes = original_num_output_nodes
+
+    def test_unreachable_threshold_requires_explicit_best_effort_label(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        monkeypatch.setattr(
+            self.exp,
+            "predict_fn",
+            lambda _: np.array([0.43], dtype=np.float32),
+        )
+        monkeypatch.setattr(self.exp, "stop_loop", lambda *_: True)
+
+        with pytest.raises(UserConfigValidationException, match="No counterfactuals found for any of the query points"):
+            self.exp.generate_counterfactuals(
+                sample_adultincome_query,
+                total_CFs=1,
+                desired_class=1,
+                stopping_threshold=0.8,
+                posthoc_sparsity_param=0,
+            )
+
+    @pytest.mark.parametrize("version", ["1.0", "2.0"])
+    def test_best_effort_metadata_survives_serialization(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+        version,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        monkeypatch.setattr(
+            self.exp,
+            "predict_fn",
+            lambda _: np.array([0.43], dtype=np.float32),
+        )
+        monkeypatch.setattr(self.exp, "stop_loop", lambda *_: True)
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            sample_adultincome_query,
+            total_CFs=1,
+            desired_class=1,
+            stopping_threshold=0.8,
+            posthoc_sparsity_param=0,
+            best_effort=True,
+        )
+        counterfactual_explanations.metadata["version"] = version
+
+        recovered_counterfactual_explanations = CounterfactualExplanations.from_json(
+            counterfactual_explanations.to_json()
+        )
+        recovered_metadata = recovered_counterfactual_explanations.cf_examples_list[0].metadata
+        final_cfs_df = recovered_counterfactual_explanations.cf_examples_list[0].final_cfs_df
+
+        assert final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == pytest.approx(0.43, abs=1e-4)
+
+        assert recovered_metadata["best_effort_enabled"] is True
+        assert recovered_metadata["counterfactual_is_valid"] == [False]
+        assert recovered_metadata["counterfactual_status"] == ["best_effort"]
+        assert recovered_metadata["counterfactual_target_scores"] == pytest.approx([0.43], abs=1e-4)
+        assert recovered_metadata["stopping_threshold"] == pytest.approx(0.8)
+        assert recovered_metadata["target_class"] == 1

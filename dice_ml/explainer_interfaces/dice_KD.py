@@ -7,6 +7,7 @@ import timeit
 
 import numpy as np
 import pandas as pd
+from raiutils.exceptions import UserConfigValidationException
 
 from dice_ml import diverse_counterfactuals as exp
 from dice_ml.constants import ModelTypes
@@ -50,7 +51,8 @@ class DiceKD(ExplainerBase):
                                   features_to_vary="all",
                                   permitted_range=None, sparsity_weight=1,
                                   feature_weights="inverse_mad", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
-                                  posthoc_sparsity_algorithm="linear", verbose=False, limit_steps_ls=10000):
+                                  posthoc_sparsity_algorithm="linear", verbose=False, limit_steps_ls=10000,
+                                  best_effort=False):
         """Generates diverse counterfactual explanations
 
         :param query_instance: A dictionary of feature names and values. Test point of interest.
@@ -75,10 +77,16 @@ class DiceKD(ExplainerBase):
                                            relationship with predicted outcome in the model.
         :param verbose: Parameter to determine whether to print 'Diverse Counterfactuals found!'
         :param limit_steps_ls: Defines an upper limit for the linear search step in the posthoc_sparsity_enhancement
+        :param best_effort: When True, returns the nearest desired-class training points even when strict feature
+                            constraints prevent enough exact matches. Returned metadata indicates whether the target
+                            goal and the feature constraints were both satisfied.
 
         :return: A CounterfactualExamples object to store and visualize the resulting counterfactual explanations
                  (see diverse_counterfactuals.py).
         """
+        if not isinstance(best_effort, bool):
+            raise UserConfigValidationException("The best_effort parameter should be a boolean.")
+
         data_df_copy = self.data_interface.data_df.copy()
 
         features_to_vary = self.setup(features_to_vary, permitted_range, query_instance, feature_weights)
@@ -101,18 +109,21 @@ class DiceKD(ExplainerBase):
         # Partitioned dataset and KD Tree for each class (binary) of the dataset
         self.dataset_with_predictions, self.KD_tree, self.predictions = \
             self.build_KD_tree(data_df_copy, desired_range, desired_class, self.predicted_outcome_name)
-        query_instance, cfs_preds = self.find_counterfactuals(data_df_copy,
-                                                              query_instance, query_instance_orig,
-                                                              desired_range,
-                                                              desired_class,
-                                                              total_CFs, features_to_vary,
-                                                              permitted_range,
-                                                              sparsity_weight,
-                                                              stopping_threshold,
-                                                              posthoc_sparsity_param,
-                                                              posthoc_sparsity_algorithm,
-                                                              verbose,
-                                                              limit_steps_ls)
+        query_instance, cfs_preds, constraints_satisfied = self.find_counterfactuals(
+            data_df_copy,
+            query_instance, query_instance_orig,
+            desired_range,
+            desired_class,
+            total_CFs, features_to_vary,
+            permitted_range,
+            sparsity_weight,
+            stopping_threshold,
+            posthoc_sparsity_param,
+            posthoc_sparsity_algorithm,
+            verbose,
+            limit_steps_ls,
+            best_effort
+        )
         self.cfs_preds = cfs_preds
         if self.final_cfs_df is not None:
             self.final_cfs_df[self.data_interface.outcome_name] = self.cfs_preds
@@ -129,7 +140,11 @@ class DiceKD(ExplainerBase):
                                           posthoc_sparsity_param=posthoc_sparsity_param,
                                           desired_range=desired_range,
                                           desired_class=desired_class_param,
-                                          model_type=self.model.model_type)
+                                          model_type=self.model.model_type,
+                                          metadata=self.build_counterfactual_metadata(
+                                              self.cfs_pred_scores if self.cfs_pred_scores is not None else [],
+                                              best_effort,
+                                              constraints_satisfied))
 
     def predict_fn_scores(self, input_instance):
         """Returns prediction scores."""
@@ -165,7 +180,7 @@ class DiceKD(ExplainerBase):
         return cfs
 
     def vary_valid(self, KD_query_instance, total_CFs, features_to_vary, permitted_range, query_instance,
-                   sparsity_weight):
+                   sparsity_weight, best_effort=False):
         """This function ensures that we only vary features_to_vary when generating counterfactuals"""
 
         # TODO: this should be a user-specified parameter
@@ -183,42 +198,49 @@ class DiceKD(ExplainerBase):
             cfs = cfs.drop(self.data_interface.outcome_name, axis=1)
 
         self.final_cfs = pd.DataFrame()
-        final_indices = []
-        cfs_preds = []
-        total_cfs_found = 0
+        valid_indices = []
+        best_effort_indices = []
 
         # Iterating through the closest points from the KD tree and checking if any of these are valid
         if self.KD_tree is not None and total_CFs > 0:
             for i in range(len(cfs)):
-                if total_cfs_found == total_CFs:
+                if len(valid_indices) == total_CFs and not best_effort:
                     break
-                valid_cf_found = True
-                for feature in self.data_interface.feature_names:
-                    if feature not in features_to_vary and cfs[feature].iat[i] != query_instance[feature].values[0]:
-                        valid_cf_found = False
-                        break
-                    if feature in self.data_interface.continuous_feature_names:
-                        if not self.feature_range[feature][0] <= cfs[feature].iat[i] <= self.feature_range[feature][1]:
-                            valid_cf_found = False
-                            break
-                    else:
-                        if not cfs[feature].iat[i] in self.feature_range[feature]:
-                            valid_cf_found = False
-                            break
+                candidate_indices = valid_indices + best_effort_indices
+                valid_cf_found = self._candidate_respects_constraints(
+                    cfs, i, features_to_vary, query_instance
+                )
 
                 if valid_cf_found:
-                    if not self.duplicates(cfs, final_indices.copy(), i):
-                        total_cfs_found += 1
-                        final_indices.append(i)
-        if total_cfs_found > 0:
+                    if not self.duplicates(cfs, candidate_indices.copy(), i):
+                        valid_indices.append(i)
+                elif best_effort:
+                    if not self.duplicates(cfs, candidate_indices.copy(), i):
+                        best_effort_indices.append(i)
+
+        final_indices = valid_indices.copy()
+        constraints_satisfied = [True] * len(valid_indices)
+        if best_effort and len(final_indices) < total_CFs:
+            needed = total_CFs - len(final_indices)
+            final_indices.extend(best_effort_indices[:needed])
+            constraints_satisfied.extend([False] * min(needed, len(best_effort_indices)))
+
+        if len(final_indices) > 0:
             self.final_cfs = cfs.iloc[final_indices]
             self.final_cfs = self.final_cfs.drop([self.predicted_outcome_name], axis=1)
-            # Finding the predicted outcome for each cf
-            for i in range(total_cfs_found):
-                cfs_preds.append(
-                    self.dataset_with_predictions.iloc[final_indices[i]][self.predicted_outcome_name])
+        return self.final_cfs[:total_CFs], constraints_satisfied[:total_CFs], len(valid_indices)
 
-        return self.final_cfs[:total_CFs], cfs_preds
+    def _candidate_respects_constraints(self, candidates, index, features_to_vary, query_instance):
+        for feature in self.data_interface.feature_names:
+            if feature not in features_to_vary and candidates[feature].iat[index] != query_instance[feature].values[0]:
+                return False
+            if feature in self.data_interface.continuous_feature_names:
+                if not self.feature_range[feature][0] <= candidates[feature].iat[index] <= self.feature_range[feature][1]:
+                    return False
+            else:
+                if candidates[feature].iat[index] not in self.feature_range[feature]:
+                    return False
+        return True
 
     def duplicates(self, cfs, final_indices, i):
         final_indices.append(i)
@@ -228,7 +250,7 @@ class DiceKD(ExplainerBase):
     def find_counterfactuals(self, data_df_copy, query_instance, query_instance_orig, desired_range, desired_class,
                              total_CFs, features_to_vary, permitted_range,
                              sparsity_weight, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm,
-                             verbose, limit_steps_ls):
+                             verbose, limit_steps_ls, best_effort):
         """Finds counterfactuals by querying a K-D tree for the nearest data points in the desired class from the dataset."""
 
         start_time = timeit.default_timer()
@@ -245,17 +267,36 @@ class DiceKD(ExplainerBase):
         # instead of a dataframe.
         query_instance_df_dummies = query_instance_df_dummies.reindex(columns=data_df_columns)
 
-        self.final_cfs, cfs_preds = self.vary_valid(query_instance_df_dummies,
-                                                    total_CFs,
-                                                    features_to_vary,
-                                                    permitted_range,
-                                                    query_instance_orig,
-                                                    sparsity_weight)
+        self.final_cfs, constraints_satisfied, valid_cfs_found = self.vary_valid(
+            query_instance_df_dummies,
+            total_CFs,
+            features_to_vary,
+            permitted_range,
+            query_instance_orig,
+            sparsity_weight,
+            best_effort
+        )
 
-        total_cfs_found = len(self.final_cfs)
-        if total_cfs_found > 0:
+        selected_cfs_found = len(self.final_cfs)
+        if selected_cfs_found > 0:
+            self.cfs_pred_scores = self.predict_fn_scores(self.final_cfs[self.data_interface.feature_names])
+            score_validity = self.decide_cf_validity(self.cfs_pred_scores).astype(bool).tolist()
+            exact_cfs_found = sum(
+                is_valid and constraints_ok for is_valid, constraints_ok in zip(score_validity, constraints_satisfied)
+            )
+
+            if not best_effort:
+                keep_indices = [ix for ix, is_valid in enumerate(score_validity) if is_valid]
+                self.final_cfs = self.final_cfs.iloc[keep_indices]
+                self.cfs_pred_scores = self.cfs_pred_scores[keep_indices]
+                constraints_satisfied = [constraints_satisfied[ix] for ix in keep_indices]
+                score_validity = [score_validity[ix] for ix in keep_indices]
+                selected_cfs_found = len(self.final_cfs)
+
+            cfs_preds = self.get_model_output_from_scores(self.cfs_pred_scores)
             # post-hoc operation on continuous features to enhance sparsity - only for public data
-            if posthoc_sparsity_param is not None and posthoc_sparsity_param > 0 and 'data_df' in self.data_interface.__dict__:
+            if posthoc_sparsity_param is not None and posthoc_sparsity_param > 0 and \
+                    'data_df' in self.data_interface.__dict__ and all(constraints_satisfied) and all(score_validity):
                 self.final_cfs_df_sparse = copy.deepcopy(self.final_cfs)
                 self.final_cfs_df_sparse = self.do_posthoc_sparsity_enhancement(self.final_cfs_df_sparse, query_instance,
                                                                                 posthoc_sparsity_param,
@@ -264,10 +305,13 @@ class DiceKD(ExplainerBase):
             else:
                 self.final_cfs_df_sparse = None
         else:
+            self.cfs_pred_scores = None
+            cfs_preds = []
             self.final_cfs_df_sparse = None
+            exact_cfs_found = 0
 
         self.final_cfs_df = self.final_cfs
-        if total_cfs_found > 0:
+        if selected_cfs_found > 0:
             self.round_to_precision()
 
         self.elapsed = timeit.default_timer() - start_time
@@ -275,14 +319,20 @@ class DiceKD(ExplainerBase):
         m, s = divmod(self.elapsed, 60)
 
         if verbose:
-            if total_cfs_found < total_CFs:
+            if exact_cfs_found < total_CFs:
                 self.elapsed = timeit.default_timer() - start_time
                 m, s = divmod(self.elapsed, 60)
-                print('Only %d (required %d) ' % (total_cfs_found, total_CFs),
-                      'Diverse Counterfactuals found for the given configuation, perhaps ',
-                      'change the query instance or the features to vary...'  '; total time taken: %02d' % m,
-                      'min %02d' % s, 'sec')
+                if best_effort and selected_cfs_found > 0:
+                    print('Only %d (required %d) valid counterfactuals found; returning best-effort nearest'
+                          % (exact_cfs_found, total_CFs),
+                          ' training points for the remaining results.', '; total time taken: %02d' % m,
+                          'min %02d' % s, 'sec')
+                else:
+                    print('Only %d (required %d) ' % (exact_cfs_found, total_CFs),
+                          'Diverse Counterfactuals found for the given configuation, perhaps ',
+                          'change the query instance or the features to vary...'  '; total time taken: %02d' % m,
+                          'min %02d' % s, 'sec')
             else:
                 print('Diverse Counterfactuals found! total time taken: %02d' % m, 'min %02d' % s, 'sec')
 
-        return query_instance, cfs_preds
+        return query_instance, cfs_preds, constraints_satisfied

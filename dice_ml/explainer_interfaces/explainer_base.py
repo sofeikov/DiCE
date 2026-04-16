@@ -156,7 +156,10 @@ class ExplainerBase(ABC):
         :param verbose: Whether to output detailed messages.
         :param sample_size: Sampling size
         :param random_seed: Random seed for reproducibility
-        :param kwargs: Other parameters accepted by specific explanation method
+        :param kwargs: Other parameters accepted by specific explanation methods, for example
+                       ``best_effort=True`` for the PyTorch gradient, random sampling, genetic,
+                       and KD-tree explainers to explicitly return metadata-labelled best-effort
+                       approximations when an exact result cannot be produced.
 
         :returns: A CounterfactualExplanations object that contains the list of
                   counterfactual examples per query_instance as one of its attributes.
@@ -761,6 +764,57 @@ class ExplainerBase(ABC):
             return target_score >= self.stopping_threshold or np.isclose(target_score, self.stopping_threshold)
         else:
             return self.target_cf_range[0] <= model_score and model_score <= self.target_cf_range[1]
+
+    def _get_regression_model_output(self, model_score):
+        if hasattr(model_score, "shape") and len(model_score.shape) > 0:
+            return float(np.asarray(model_score, dtype=np.float32).reshape(-1)[0])
+        return float(model_score)
+
+    def get_distance_from_target(self, model_score):
+        if self.model.model_type == ModelTypes.Classifier:
+            return abs(self.get_target_class_score(model_score) - self.stopping_threshold)
+
+        model_output = self._get_regression_model_output(model_score)
+        if self.target_cf_range[0] <= model_output <= self.target_cf_range[1]:
+            return 0.0
+        return min(abs(model_output - self.target_cf_range[0]), abs(model_output - self.target_cf_range[1]))
+
+    def build_counterfactual_metadata(self, model_scores, best_effort, constraints_satisfied=None):
+        if constraints_satisfied is None:
+            constraints_satisfied = [True] * len(model_scores)
+
+        validity = [bool(self.is_cf_valid(score)) for score in model_scores]
+        constraints_satisfied = [bool(flag) for flag in constraints_satisfied]
+        status = []
+        for is_valid, constraints_ok in zip(validity, constraints_satisfied):
+            if is_valid and constraints_ok:
+                status.append("valid")
+            elif best_effort:
+                status.append("best_effort")
+            else:
+                status.append("invalid")
+
+        metadata = {
+            "best_effort_enabled": best_effort,
+            "counterfactual_is_valid": validity,
+            "counterfactual_status": status,
+            "counterfactual_constraints_satisfied": constraints_satisfied,
+            "counterfactual_goal_distances": [float(self.get_distance_from_target(score)) for score in model_scores],
+        }
+
+        if self.model.model_type == ModelTypes.Classifier:
+            metadata["counterfactual_target_scores"] = [
+                float(self.get_target_class_score(score)) for score in model_scores
+            ]
+            metadata["stopping_threshold"] = float(self.stopping_threshold)
+            metadata["target_class"] = int(self.target_cf_class)
+        else:
+            metadata["counterfactual_outcomes"] = [
+                self._get_regression_model_output(score) for score in model_scores
+            ]
+            metadata["desired_range"] = list(self.target_cf_range)
+
+        return metadata
 
     def decode_model_output(self, encoded_labels):
         if self.model.model_type == ModelTypes.Classifier:

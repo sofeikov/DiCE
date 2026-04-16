@@ -8,6 +8,7 @@ import timeit
 
 import numpy as np
 import pandas as pd
+from raiutils.exceptions import UserConfigValidationException
 
 from dice_ml import diverse_counterfactuals as exp
 from dice_ml.constants import ModelTypes
@@ -39,7 +40,7 @@ class DiceRandom(ExplainerBase):
                                   desired_class="opposite", permitted_range=None,
                                   features_to_vary="all", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", sample_size=1000, random_seed=None, verbose=False,
-                                  limit_steps_ls=10000):
+                                  limit_steps_ls=10000, best_effort=False):
         """Generate counterfactuals by randomly sampling features.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe.
@@ -60,9 +61,14 @@ class DiceRandom(ExplainerBase):
         :param sample_size: Sampling size
         :param random_seed: Random seed for reproducibility
         :param limit_steps_ls: Defines an upper limit for the linear search step in the posthoc_sparsity_enhancement
+        :param best_effort: When True, explicitly returns the closest sampled candidates when none of the sampled
+                            points satisfy the requested target threshold.
 
         :returns: A CounterfactualExamples object that contains the dataframe of generated counterfactuals as an attribute.
         """
+        if not isinstance(best_effort, bool):
+            raise UserConfigValidationException("The best_effort parameter should be a boolean.")
+
         self.features_to_vary = self.setup(features_to_vary, permitted_range, query_instance, feature_weights=None)
 
         if features_to_vary == "all":
@@ -101,6 +107,7 @@ class DiceRandom(ExplainerBase):
         # Generate copies of the query instance that will be changed one feature
         # at a time to encourage sparsity.
         cfs_df = None
+        best_effort_candidates = None
         candidate_cfs = pd.DataFrame(
             np.repeat(query_instance.values, sample_size, axis=0), columns=query_instance.columns)
         # Loop to change one feature at a time, then two features, and so on.
@@ -109,6 +116,10 @@ class DiceRandom(ExplainerBase):
             for k in range(sample_size):
                 candidate_cfs.at[k, selected_features[k][0]] = random_instances.at[k, selected_features[k][0]]
             scores = self.predict_fn(candidate_cfs)
+            if best_effort:
+                best_effort_candidates = self._update_best_effort_candidates(
+                    best_effort_candidates, candidate_cfs, scores, total_CFs
+                )
             validity = self.decide_cf_validity(scores)
             if sum(validity) > 0:
                 rows_to_add = candidate_cfs[validity == 1]
@@ -124,32 +135,19 @@ class DiceRandom(ExplainerBase):
 
         self.total_cfs_found = 0
         self.valid_cfs_found = False
-        if cfs_df is not None and len(cfs_df) > 0:
-            if len(cfs_df) > total_CFs:
-                cfs_df = cfs_df.sample(total_CFs)
-            cfs_df.reset_index(inplace=True, drop=True)
-            if len(cfs_df) > 0:
-                self.cfs_pred_scores = self.predict_fn(cfs_df)
-                cfs_df[self.data_interface.outcome_name] = self.get_model_output_from_scores(self.cfs_pred_scores)
-            else:
-                if self.model.model_type == ModelTypes.Classifier:
-                    self.cfs_pred_scores = [0]*self.num_output_nodes
-                else:
-                    self.cfs_pred_scores = [0]
-            self.total_cfs_found = len(cfs_df)
-
+        valid_cfs_count = 0 if cfs_df is None else len(cfs_df)
+        selected_cfs_df = self._select_best_effort_counterfactuals(cfs_df, best_effort_candidates, total_CFs, best_effort)
+        if selected_cfs_df is not None and len(selected_cfs_df) > 0:
+            selected_cfs_df.reset_index(inplace=True, drop=True)
+            self.cfs_pred_scores = self.predict_fn(selected_cfs_df)
+            selected_cfs_df[self.data_interface.outcome_name] = self.get_model_output_from_scores(self.cfs_pred_scores)
+            self.total_cfs_found = valid_cfs_count
             self.valid_cfs_found = True if self.total_cfs_found >= self.total_CFs else False
-            if len(cfs_df) > 0:
-                final_cfs_df = cfs_df[self.data_interface.feature_names + [self.data_interface.outcome_name]]
-                final_cfs_df[self.data_interface.outcome_name] = \
-                    final_cfs_df[self.data_interface.outcome_name].round(self.outcome_precision)
-                self.cfs_preds = final_cfs_df[[self.data_interface.outcome_name]].values
-                self.final_cfs = final_cfs_df[self.data_interface.feature_names].values
-            else:
-                final_cfs_df = None
-                self.cfs_preds = None
-                self.cfs_pred_scores = None
-                self.final_cfs = None
+            final_cfs_df = selected_cfs_df[self.data_interface.feature_names + [self.data_interface.outcome_name]]
+            final_cfs_df[self.data_interface.outcome_name] = \
+                final_cfs_df[self.data_interface.outcome_name].round(self.outcome_precision)
+            self.cfs_preds = final_cfs_df[[self.data_interface.outcome_name]].values
+            self.final_cfs = final_cfs_df[self.data_interface.feature_names].values
         else:
             final_cfs_df = None
             self.cfs_preds = None
@@ -180,12 +178,21 @@ class DiceRandom(ExplainerBase):
             self.decode_to_original_labels(test_instance_df, final_cfs_df, final_cfs_df_sparse)
         if final_cfs_df is not None:
             if verbose:
-                print('Diverse Counterfactuals found! total time taken: %02d' %
-                      m, 'min %02d' % s, 'sec')
+                if self.total_cfs_found == len(final_cfs_df):
+                    print('Diverse Counterfactuals found! total time taken: %02d' %
+                          m, 'min %02d' % s, 'sec')
+                else:
+                    print('Only %d (required %d) valid counterfactuals found; returning best-effort samples for the'
+                          % (self.total_cfs_found, self.total_CFs),
+                          ' remaining results.', '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
         else:
             if self.total_cfs_found == 0:
-                print('No Counterfactuals found for the given configuration, perhaps try with different parameters...',
-                      '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
+                if best_effort:
+                    print('No threshold-satisfying counterfactuals found; sampled best-effort search also returned no',
+                          ' candidates.', '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
+                else:
+                    print('No Counterfactuals found for the given configuration, perhaps try with different parameters...',
+                          '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
             else:
                 print('Only %d (required %d) ' % (self.total_cfs_found, self.total_CFs),
                       'Diverse Counterfactuals found for the given configuration, perhaps try with different parameters...',
@@ -200,7 +207,46 @@ class DiceRandom(ExplainerBase):
                                           posthoc_sparsity_param=posthoc_sparsity_param,
                                           desired_class=desired_class_param,
                                           desired_range=desired_range,
-                                          model_type=self.model.model_type)
+                                          model_type=self.model.model_type,
+                                          metadata=self.build_counterfactual_metadata(
+                                              self.cfs_pred_scores if self.cfs_pred_scores is not None else [],
+                                              best_effort))
+
+    def _update_best_effort_candidates(self, best_effort_candidates, candidate_cfs, scores, total_CFs):
+        ranked_candidates = candidate_cfs.copy()
+        ranked_candidates["_distance_to_goal"] = [
+            self.get_distance_from_target(score) for score in scores
+        ]
+        if best_effort_candidates is None:
+            best_effort_candidates = ranked_candidates
+        else:
+            best_effort_candidates = pd.concat([best_effort_candidates, ranked_candidates], ignore_index=True)
+
+        keep_count = max(total_CFs * 5, total_CFs)
+        return best_effort_candidates.sort_values("_distance_to_goal").drop_duplicates(
+            subset=self.data_interface.feature_names
+        ).head(keep_count)
+
+    def _select_best_effort_counterfactuals(self, cfs_df, best_effort_candidates, total_CFs, best_effort):
+        selected_cfs_df = None
+        if cfs_df is not None and len(cfs_df) > 0:
+            if len(cfs_df) > total_CFs:
+                cfs_df = cfs_df.sample(total_CFs)
+            selected_cfs_df = cfs_df[self.data_interface.feature_names].copy()
+
+        if not best_effort or best_effort_candidates is None:
+            return selected_cfs_df
+
+        ranked_best_effort = best_effort_candidates[self.data_interface.feature_names].copy()
+        if selected_cfs_df is None:
+            selected_cfs_df = ranked_best_effort
+        else:
+            selected_cfs_df = pd.concat([selected_cfs_df, ranked_best_effort], ignore_index=True)
+
+        selected_cfs_df = selected_cfs_df.drop_duplicates().head(total_CFs)
+        if len(selected_cfs_df) == 0:
+            return None
+        return selected_cfs_df
 
     def get_samples(self, fixed_features_values, feature_range, sampling_random_seed, sampling_size):
 

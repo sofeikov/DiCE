@@ -15,6 +15,7 @@ class _CommonSchemaConstants:
     LOCAL_IMPORTANCE = 'local_importance'
     SUMMARY_IMPORTANCE = 'summary_importance'
     METADATA = 'metadata'
+    CF_EXAMPLES_METADATA = 'cf_examples_metadata'
 
 
 class _CounterfactualExpV1SchemaConstants:
@@ -153,12 +154,14 @@ class CounterfactualExplanations:
         elif serialization_version == _SchemaVersions.V2:
             combined_test_instance_list = []
             combined_final_cfs_list = []
+            combined_cf_examples_metadata = []
             data_interface = None
             feature_names = None
             feature_names_including_target = None
             model_type = None
             desired_class = None
             desired_range = None
+            has_cf_examples_metadata = False
             for cf_examples in self.cf_examples_list:
                 cf_examples_str = cf_examples.to_json(
                     serialization_version=serialization_version)
@@ -169,6 +172,11 @@ class CounterfactualExplanations:
                     _DiverseCFV2SchemaConstants.TEST_INSTANCE_LIST])
                 combined_final_cfs_list.append(serialized_cf_examples[
                     _DiverseCFV2SchemaConstants.FINAL_CFS_LIST])
+                cf_example_metadata = serialized_cf_examples.get(
+                    _DiverseCFV2SchemaConstants.METADATA, {}
+                )
+                combined_cf_examples_metadata.append(cf_example_metadata)
+                has_cf_examples_metadata = has_cf_examples_metadata or bool(cf_example_metadata)
                 data_interface = serialized_cf_examples[
                     _DiverseCFV2SchemaConstants.DATA_INTERFACE]
                 feature_names = serialized_cf_examples[
@@ -197,6 +205,10 @@ class CounterfactualExplanations:
                 for feature_name in feature_names:
                     summary_importance_list.append(self.summary_importance.get(feature_name))
 
+            serialized_metadata = dict(self.metadata)
+            if has_cf_examples_metadata:
+                serialized_metadata[_CommonSchemaConstants.CF_EXAMPLES_METADATA] = combined_cf_examples_metadata
+
             entire_dict = {
                 _CounterfactualExpV2SchemaConstants.TEST_DATA: combined_test_instance_list,
                 _CounterfactualExpV2SchemaConstants.CFS_LIST: combined_final_cfs_list,
@@ -208,7 +220,7 @@ class CounterfactualExplanations:
                 _CounterfactualExpV2SchemaConstants.MODEL_TYPE: model_type,
                 _CounterfactualExpV2SchemaConstants.DESIRED_CLASS: desired_class,
                 _CounterfactualExpV2SchemaConstants.DESIRED_RANGE: desired_range,
-                _CounterfactualExpV1SchemaConstants.METADATA: self.metadata
+                _CounterfactualExpV1SchemaConstants.METADATA: serialized_metadata
             }
             CounterfactualExplanations._check_cf_exp_output_against_json_schema(
                 entire_dict, version=serialization_version)
@@ -249,9 +261,15 @@ class CounterfactualExplanations:
                 CounterfactualExplanations._check_cf_exp_output_against_json_schema(
                     json_dict, version=version)
                 cf_examples_list = []
+                cf_examples_metadata = json_dict[_CommonSchemaConstants.METADATA].get(
+                    _CommonSchemaConstants.CF_EXAMPLES_METADATA
+                )
                 for index in range(0, len(json_dict[_CounterfactualExpV2SchemaConstants.CFS_LIST])):
                     # We need to save the json again since we need to recompose the
                     # counterfactual example.
+                    cf_example_metadata = {}
+                    if cf_examples_metadata is not None and index < len(cf_examples_metadata):
+                        cf_example_metadata = cf_examples_metadata[index]
                     cf_examples_str = json.dumps(
                         {
                             _DiverseCFV2SchemaConstants.FINAL_CFS_LIST: json_dict[
@@ -267,7 +285,8 @@ class CounterfactualExplanations:
                             _DiverseCFV2SchemaConstants.MODEL_TYPE: json_dict[
                                 _CounterfactualExpV2SchemaConstants.MODEL_TYPE],
                             _DiverseCFV2SchemaConstants.FEATURE_NAMES_INCLUDING_TARGET: json_dict[
-                                _CounterfactualExpV2SchemaConstants.FEATURE_NAMES_INCLUDING_TARGET]
+                                _CounterfactualExpV2SchemaConstants.FEATURE_NAMES_INCLUDING_TARGET],
+                            _DiverseCFV2SchemaConstants.METADATA: cf_example_metadata
                         }
                     )
                     cf_examples_list.append(

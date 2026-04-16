@@ -7,6 +7,7 @@ import timeit
 
 import numpy as np
 import torch
+from raiutils.exceptions import UserConfigValidationException
 
 from dice_ml import diverse_counterfactuals as exp
 from dice_ml.constants import ModelTypes
@@ -53,7 +54,8 @@ class DicePyTorch(ExplainerBase):
                                   feature_weights="inverse_mad", optimizer="pytorch:adam", learning_rate=0.05, min_iter=500,
                                   max_iter=5000, project_iter=0, loss_diff_thres=1e-5, loss_converge_maxiter=1, verbose=False,
                                   init_near_query_instance=True, tie_random=False, stopping_threshold=0.5,
-                                  posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear", limit_steps_ls=10000):
+                                  posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
+                                  limit_steps_ls=10000, best_effort=False):
         """Generates diverse counterfactual explanations.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe
@@ -95,10 +97,16 @@ class DicePyTorch(ExplainerBase):
                                            (for instance, income varying from 10k to 1000k) and only if the features
                                            share a monotonic relationship with predicted outcome in the model.
         :param limit_steps_ls: Defines an upper limit for the linear search step in the posthoc_sparsity_enhancement
+        :param best_effort: When True, explicitly keeps and returns the closest available optimization result even if
+                            it does not satisfy the requested stopping_threshold. Returned metadata indicates whether
+                            each counterfactual met the threshold or is a best-effort approximation.
 
         :return: A CounterfactualExamples object to store and visualize the resulting
                  counterfactual explanations (see diverse_counterfactuals.py).
         """
+        if not isinstance(best_effort, bool):
+            raise UserConfigValidationException("The best_effort parameter should be a boolean.")
+
         # check feature MAD validity and throw warnings
         if feature_weights == "inverse_mad":
             self.data_interface.get_valid_mads(display_warnings=True, return_mads=False)
@@ -124,7 +132,8 @@ class DicePyTorch(ExplainerBase):
             self.find_counterfactuals(
                 query_instance, desired_class, optimizer, learning_rate, min_iter, max_iter,
                 project_iter, loss_diff_thres, loss_converge_maxiter, verbose, init_near_query_instance,
-                tie_random, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm, limit_steps_ls)
+                tie_random, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm,
+                limit_steps_ls, best_effort)
 
         desired_class_param = desired_class
         if self.model.model_type == ModelTypes.Classifier:
@@ -136,7 +145,8 @@ class DicePyTorch(ExplainerBase):
             test_instance_df=test_instance_df,
             final_cfs_df_sparse=final_cfs_df_sparse,
             posthoc_sparsity_param=posthoc_sparsity_param,
-            desired_class=desired_class_param)
+            desired_class=desired_class_param,
+            metadata=self._build_counterfactual_metadata(best_effort))
 
     def get_model_output(self, input_instance,
                          transform_data=False, out_tensor=True):
@@ -422,10 +432,101 @@ class DicePyTorch(ExplainerBase):
             self.loss_converge_iter = 0
             return False
 
+    def _get_average_prediction_distance_from_threshold(self, predictions):
+        return np.mean(
+            [abs(self.get_target_class_score(pred) - self.stopping_threshold) for pred in predictions]
+        )
+
+    @staticmethod
+    def _store_backup_candidates(backup_cfs, backup_preds, start_index, candidates, predictions):
+        for ix, candidate in enumerate(candidates):
+            backup_cfs[start_index + ix] = copy.deepcopy(candidate)
+            backup_preds[start_index + ix] = copy.deepcopy(predictions[ix])
+
+    def _build_counterfactual_metadata(self, best_effort):
+        return self.build_counterfactual_metadata(self.cfs_preds, best_effort)
+
+    def _update_backup_candidates(self, loop_ix, candidates, predictions):
+        avg_preds_dist = self._get_average_prediction_distance_from_threshold(predictions)
+
+        if avg_preds_dist < self.best_effort_min_dist_from_threshold[loop_ix]:
+            self.best_effort_min_dist_from_threshold[loop_ix] = avg_preds_dist
+            self._store_backup_candidates(
+                self.best_effort_backup_cfs,
+                self.best_effort_backup_cfs_preds,
+                loop_ix,
+                candidates,
+                predictions,
+            )
+
+        if all(self.is_cf_valid(pred) for pred in predictions) and avg_preds_dist < self.min_dist_from_threshold[loop_ix]:
+            self.min_dist_from_threshold[loop_ix] = avg_preds_dist
+            self._store_backup_candidates(
+                self.best_backup_cfs,
+                self.best_backup_cfs_preds,
+                loop_ix,
+                candidates,
+                predictions,
+            )
+
+    def _restore_backup_cfs_if_needed(self, loop_find_CFs, best_effort):
+        if not any(not self.is_cf_valid(pred) for pred in self.cfs_preds):
+            return
+
+        for loop_ix in range(loop_find_CFs):
+            if self.min_dist_from_threshold[loop_ix] != 100:
+                backup_cfs = self.best_backup_cfs
+                backup_preds = self.best_backup_cfs_preds
+            elif best_effort and self.best_effort_min_dist_from_threshold[loop_ix] != 100:
+                backup_cfs = self.best_effort_backup_cfs
+                backup_preds = self.best_effort_backup_cfs_preds
+            else:
+                continue
+
+            for ix in range(self.total_CFs):
+                self.final_cfs[loop_ix+ix] = copy.deepcopy(backup_cfs[loop_ix+ix])
+                self.cfs_preds[loop_ix+ix] = copy.deepcopy(backup_preds[loop_ix+ix])
+
+    def _get_return_indices(self, total_counterfactuals, best_effort, minutes, seconds):
+        if all(self.is_cf_valid(pred) for pred in self.cfs_preds):
+            self.total_CFs_found = total_counterfactuals
+            print('Diverse Counterfactuals found! total time taken: %02d' %
+                  minutes, 'min %02d' % seconds, 'sec')
+            return [ix for ix in range(total_counterfactuals)]
+
+        valid_ix = []
+        for cf_ix, pred in enumerate(self.cfs_preds):
+            if self.is_cf_valid(pred):
+                valid_ix.append(cf_ix)
+
+        self.total_CFs_found = len(valid_ix)
+        if self.total_CFs_found == 0:
+            if best_effort:
+                print('No threshold-satisfying counterfactuals found; returning best-effort counterfactuals.',
+                      '; total time taken: %02d' % minutes, 'min %02d' % seconds, 'sec')
+            else:
+                print('No Counterfactuals found for the given configuation, ',
+                      'perhaps try with different values of proximity (or diversity) weights or learning rate...',
+                      '; total time taken: %02d' % minutes, 'min %02d' % seconds, 'sec')
+        else:
+            if best_effort:
+                print('Only %d (required %d)' % (self.total_CFs_found, total_counterfactuals),
+                      ' threshold-satisfying counterfactuals found; returning best-effort counterfactuals for the',
+                      ' remaining results.', '; total time taken: %02d' % minutes, 'min %02d' % seconds, 'sec')
+            else:
+                print('Only %d (required %d)' % (self.total_CFs_found, total_counterfactuals),
+                      ' Diverse Counterfactuals found for the given configuation, perhaps try with different',
+                      ' values of proximity (or diversity) weights or learning rate...',
+                      '; total time taken: %02d' % minutes, 'min %02d' % seconds, 'sec')
+
+        if best_effort:
+            return [ix for ix in range(total_counterfactuals)]
+        return valid_ix
+
     def find_counterfactuals(self, query_instance, desired_class, optimizer, learning_rate, min_iter,
                              max_iter, project_iter, loss_diff_thres, loss_converge_maxiter, verbose,
                              init_near_query_instance, tie_random, stopping_threshold, posthoc_sparsity_param,
-                             posthoc_sparsity_algorithm, limit_steps_ls):
+                             posthoc_sparsity_algorithm, limit_steps_ls, best_effort):
         """Finds counterfactuals by gradient-descent."""
         query_instance = self.model.transformer.transform(query_instance).to_numpy(dtype=np.float64)[0]
         self.x1 = torch.tensor(query_instance)
@@ -462,6 +563,9 @@ class DicePyTorch(ExplainerBase):
         self.best_backup_cfs = [0]*max(self.total_CFs, loop_find_CFs)
         self.best_backup_cfs_preds = [0]*max(self.total_CFs, loop_find_CFs)
         self.min_dist_from_threshold = [100]*loop_find_CFs  # for backup CFs
+        self.best_effort_backup_cfs = [0]*max(self.total_CFs, loop_find_CFs)
+        self.best_effort_backup_cfs_preds = [0]*max(self.total_CFs, loop_find_CFs)
+        self.best_effort_min_dist_from_threshold = [100]*loop_find_CFs
 
         for loop_ix in range(loop_find_CFs):
             # CF init
@@ -512,16 +616,7 @@ class DicePyTorch(ExplainerBase):
                 # backing up CFs if they are valid
                 temp_cfs_stored = self.round_off_cfs(assign=False)
                 test_preds_stored = [self.predict_fn(cf) for cf in temp_cfs_stored]
-
-                if all(self.is_cf_valid(pred) for pred in test_preds_stored):
-                    avg_preds_dist = np.mean(
-                        [abs(self.get_target_class_score(pred) - self.stopping_threshold) for pred in test_preds_stored]
-                    )
-                    if avg_preds_dist < self.min_dist_from_threshold[loop_ix]:
-                        self.min_dist_from_threshold[loop_ix] = avg_preds_dist
-                        for ix in range(self.total_CFs):
-                            self.best_backup_cfs[loop_ix+ix] = copy.deepcopy(temp_cfs_stored[ix])
-                            self.best_backup_cfs_preds[loop_ix+ix] = copy.deepcopy(test_preds_stored[ix])
+                self._update_backup_candidates(loop_ix, temp_cfs_stored, test_preds_stored)
 
             # rounding off final cfs - not necessary when inter_project=True
             self.round_off_cfs(assign=True)
@@ -538,13 +633,7 @@ class DicePyTorch(ExplainerBase):
 
         self.cfs_preds = [self.predict_fn(cfs) for cfs in self.final_cfs]
 
-        # update final_cfs from backed up CFs if valid CFs are not found
-        if any(not self.is_cf_valid(pred) for pred in self.cfs_preds):
-            for loop_ix in range(loop_find_CFs):
-                if self.min_dist_from_threshold[loop_ix] != 100:
-                    for ix in range(self.total_CFs):
-                        self.final_cfs[loop_ix+ix] = copy.deepcopy(self.best_backup_cfs[loop_ix+ix])
-                        self.cfs_preds[loop_ix+ix] = copy.deepcopy(self.best_backup_cfs_preds[loop_ix+ix])
+        self._restore_backup_cfs_if_needed(loop_find_CFs, best_effort)
 
         # convert to the expected numpy array format
         query_instance = np.array([query_instance], dtype=np.float32)
@@ -589,30 +678,9 @@ class DicePyTorch(ExplainerBase):
             final_cfs_df_sparse = None
 
         m, s = divmod(self.elapsed, 60)
-        if all(self.is_cf_valid(pred) for pred in self.cfs_preds):
-            self.total_CFs_found = max(loop_find_CFs, self.total_CFs)
-            valid_ix = [ix for ix in range(max(loop_find_CFs, self.total_CFs))]  # indexes of valid CFs
-            print('Diverse Counterfactuals found! total time taken: %02d' %
-                  m, 'min %02d' % s, 'sec')
-        else:
-            self.total_CFs_found = 0
-            valid_ix = []  # indexes of valid CFs
-            for cf_ix, pred in enumerate(self.cfs_preds):
-                if self.is_cf_valid(pred):
-                    self.total_CFs_found += 1
-                    valid_ix.append(cf_ix)
-
-            if self.total_CFs_found == 0:
-                print('No Counterfactuals found for the given configuation, ',
-                      'perhaps try with different values of proximity (or diversity) weights or learning rate...',
-                      '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
-            else:
-                print('Only %d (required %d)' % (self.total_CFs_found, max(loop_find_CFs, self.total_CFs)),
-                      ' Diverse Counterfactuals found for the given configuation, perhaps try with different',
-                      ' values of proximity (or diversity) weights or learning rate...',
-                      '; total time taken: %02d' % m, 'min %02d' % s, 'sec')
+        returned_ix = self._get_return_indices(max(loop_find_CFs, self.total_CFs), best_effort, m, s)
 
         if final_cfs_df_sparse is not None:
-            final_cfs_df_sparse = final_cfs_df_sparse.iloc[valid_ix].reset_index(drop=True)
-        # returning only valid CFs
-        return final_cfs_df.iloc[valid_ix].reset_index(drop=True), test_instance_df, final_cfs_df_sparse
+            final_cfs_df_sparse = final_cfs_df_sparse.iloc[returned_ix].reset_index(drop=True)
+
+        return final_cfs_df.iloc[returned_ix].reset_index(drop=True), test_instance_df, final_cfs_df_sparse

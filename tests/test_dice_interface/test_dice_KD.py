@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from raiutils.exceptions import UserConfigValidationException
 
 from dice_ml.counterfactual_explanations import CounterfactualExplanations
 from dice_ml.diverse_counterfactuals import CounterfactualExamples
@@ -42,6 +43,62 @@ class TestDiceKDBinaryClassificationMethods:
             total_CFs=total_CFs)
 
         assert counterfactual_explanations is not None
+
+    def test_kd_tree_best_effort_returns_nearest_training_point_when_constraints_block_exact_match(
+        self,
+        sample_custom_query_2,
+    ):
+        with pytest.raises(UserConfigValidationException, match="No counterfactuals found for any of the query points"):
+            self.exp.generate_counterfactuals(
+                query_instances=sample_custom_query_2,
+                desired_class=0,
+                total_CFs=1,
+                features_to_vary=["Numerical"],
+            )
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            query_instances=sample_custom_query_2,
+            desired_class=0,
+            total_CFs=1,
+            features_to_vary=["Numerical"],
+            best_effort=True,
+        )
+
+        cf_examples = counterfactual_explanations.cf_examples_list[0]
+        assert cf_examples.final_cfs_df is not None
+        assert len(cf_examples.final_cfs_df) == 1
+        assert cf_examples.final_cfs_df["Categorical"].iloc[0] != sample_custom_query_2["Categorical"].iloc[0]
+        assert cf_examples.metadata["best_effort_enabled"] is True
+        assert cf_examples.metadata["counterfactual_status"] == ["best_effort"]
+        assert cf_examples.metadata["counterfactual_constraints_satisfied"] == [False]
+
+    def test_kd_tree_respects_stopping_threshold_when_best_effort_is_disabled(
+        self,
+        sample_custom_query_1,
+    ):
+        with pytest.raises(UserConfigValidationException, match="No counterfactuals found for any of the query points"):
+            self.exp.generate_counterfactuals(
+                query_instances=sample_custom_query_1,
+                desired_class=0,
+                total_CFs=1,
+                stopping_threshold=0.999,
+            )
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            query_instances=sample_custom_query_1,
+            desired_class=0,
+            total_CFs=1,
+            stopping_threshold=0.999,
+            best_effort=True,
+        )
+
+        cf_examples = counterfactual_explanations.cf_examples_list[0]
+        assert cf_examples.final_cfs_df is not None
+        assert len(cf_examples.final_cfs_df) == 1
+        assert cf_examples.metadata["best_effort_enabled"] is True
+        assert cf_examples.metadata["counterfactual_is_valid"] == [False]
+        assert cf_examples.metadata["counterfactual_status"] == ["best_effort"]
+        assert cf_examples.metadata["counterfactual_constraints_satisfied"] == [True]
 
     # Testing that the features_to_vary argument actually varies only the features that you wish to vary
     @pytest.mark.skip(reason="Need to fix this test")
