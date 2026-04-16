@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import sklearn
 from raiutils.exceptions import UserConfigValidationException
@@ -110,6 +111,33 @@ class TestDiceGeneticBinaryClassificationMethods:
         mocker.patch('dice_ml.model_interfaces.pytorch_model.PyTorchModel.get_output', return_value=[[0, 0.5, 0.5]])
         custom_preds = self.exp._predict_fn_custom(sample_custom_query_2, desired_class)
         assert custom_preds[0] == desired_class
+
+    def test_best_effort_returns_closest_population_member(self, monkeypatch, sample_custom_query_2):
+        np.random.seed(0)
+        monkeypatch.setattr(
+            self.exp,
+            "predict_fn_scores",
+            lambda *_: np.array([[0.57, 0.43]], dtype=np.float32),
+        )
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            query_instances=sample_custom_query_2,
+            total_CFs=1,
+            desired_class=1,
+            initialization="random",
+            maxiterations=0,
+            stopping_threshold=0.8,
+            best_effort=True,
+        )
+
+        cf_examples = counterfactual_explanations.cf_examples_list[0]
+        assert cf_examples.final_cfs_df is not None
+        assert len(cf_examples.final_cfs_df) == 1
+        assert cf_examples.metadata["best_effort_enabled"] is True
+        assert cf_examples.metadata["counterfactual_is_valid"] == [False]
+        assert cf_examples.metadata["counterfactual_status"] == ["best_effort"]
+        assert cf_examples.metadata["counterfactual_constraints_satisfied"] == [True]
+        assert cf_examples.metadata["counterfactual_target_scores"] == pytest.approx([0.43], abs=1e-4)
 
 
 class TestDiceGeneticBinaryStrClassificationMethods:

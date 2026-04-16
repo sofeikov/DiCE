@@ -117,6 +117,41 @@ class TestDiceRandomBinaryClassificationMethods:
         assert self.exp.stopping_threshold == pytest.approx(stopping_threshold)
         assert self.exp.cfs_pred_scores[0][desired_class] == pytest.approx(expected_target_score, abs=1e-4)
 
+    def test_random_best_effort_returns_sampled_nearest_miss(
+        self,
+        monkeypatch,
+        sample_custom_query_1,
+    ):
+        model_score = np.array([0.57, 0.43], dtype=np.float32)
+
+        def fake_predict_fn(input_instance):
+            return np.tile(
+                model_score.reshape(1, -1),
+                (len(input_instance), 1),
+            )
+
+        monkeypatch.setattr(self.exp, "predict_fn", fake_predict_fn)
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            query_instances=sample_custom_query_1,
+            total_CFs=1,
+            desired_class=1,
+            stopping_threshold=0.8,
+            sample_size=10,
+            random_seed=0,
+            posthoc_sparsity_param=0,
+            best_effort=True,
+        )
+
+        cf_examples = counterfactual_explanations.cf_examples_list[0]
+        assert cf_examples.final_cfs_df is not None
+        assert len(cf_examples.final_cfs_df) == 1
+        assert cf_examples.metadata["best_effort_enabled"] is True
+        assert cf_examples.metadata["counterfactual_is_valid"] == [False]
+        assert cf_examples.metadata["counterfactual_status"] == ["best_effort"]
+        assert cf_examples.metadata["counterfactual_constraints_satisfied"] == [True]
+        assert cf_examples.metadata["counterfactual_target_scores"] == pytest.approx([0.43], abs=1e-4)
+
 
 class TestDiceRandomStrBinaryClassificationMethods:
     @pytest.fixture(autouse=True)

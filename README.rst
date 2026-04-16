@@ -188,6 +188,10 @@ This fork documents classifier targeting explicitly.
 * This differs from original DiCE, which mixes binary-specific threshold checks, threshold coercion in some paths, and argmax-only multiclass validity.
 * Randomized sampling, genetic, and KD-tree explainers keep the returned outcome column as the model-predicted class label/index.
 * The PyTorch gradient explainer keeps its legacy payload shape: binary explanations return the positive-class score, while multiclass explanations return the predicted class index.
+* ``generate_counterfactuals(..., best_effort=True)`` is supported by the PyTorch gradient, random sampling, genetic, and KD-tree explainers.
+* For gradient, random, and genetic explainers, best-effort returns the closest available result when the requested target threshold is unreachable. For KD-tree, best-effort returns the nearest desired-class training points when strict feature constraints prevent enough exact matches.
+* Returned explanations annotate ``cf_examples_list[i].metadata`` with per-counterfactual statuses (``valid`` or ``best_effort``), target-goal distances, target-class scores for classifiers, and ``counterfactual_constraints_satisfied`` so callers can distinguish exact results from approximations.
+* Leaving ``best_effort`` disabled preserves the legacy behavior: these explainers still return only exact counterfactuals and otherwise surface ``No counterfactuals found``.
 
 Supported use-cases
 -------------------

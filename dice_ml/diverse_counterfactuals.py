@@ -15,6 +15,7 @@ class _DiverseCFV1SchemaConstants:
     MODEL_TYPE = 'model_type'
     DESIRED_CLASS = 'desired_class'
     DESIRED_RANGE = 'desired_range'
+    METADATA = 'metadata'
     TEST_INSTANCE_DF = 'test_instance_df'
     FINAL_CFS_DF = 'final_cfs_df'
 
@@ -24,6 +25,7 @@ class _DiverseCFV2SchemaConstants:
     MODEL_TYPE = 'model_type'
     DESIRED_CLASS = 'desired_class'
     DESIRED_RANGE = 'desired_range'
+    METADATA = 'metadata'
     FEATURE_NAMES_INCLUDING_TARGET = 'feature_names_including_target'
     FEATURE_NAMES = 'feature_names'
     TEST_INSTANCE_LIST = 'test_instance_list'
@@ -46,7 +48,7 @@ class CounterfactualExamples:
     def __init__(self, data_interface=None, final_cfs_df=None, test_instance_df=None,
                  final_cfs_df_sparse=None, posthoc_sparsity_param=0,
                  desired_range=None, desired_class="opposite",
-                 model_type=ModelTypes.Classifier):
+                 model_type=ModelTypes.Classifier, metadata=None):
 
         self.data_interface = data_interface
         self.final_cfs_df = final_cfs_df
@@ -55,6 +57,7 @@ class CounterfactualExamples:
         self.model_type = model_type
         self.desired_class = desired_class
         self.desired_range = desired_range
+        self.metadata = dict(metadata) if metadata is not None else {}
 
         self.final_cfs_list = None
         self.posthoc_sparsity_param = posthoc_sparsity_param  # might be useful for future additions
@@ -73,6 +76,7 @@ class CounterfactualExamples:
             return self.desired_class == other_counterfactual_example.desired_class and \
                         self.desired_range == other_counterfactual_example.desired_range and \
                         self.model_type == other_counterfactual_example.model_type and \
+                        self.metadata == other_counterfactual_example.metadata and \
                         (self.final_cfs_df is None) == \
                         (other_counterfactual_example.final_cfs_df is None) and \
                         (self.final_cfs_df_sparse is None) == \
@@ -193,6 +197,7 @@ class CounterfactualExamples:
                 _DiverseCFV1SchemaConstants.MODEL_TYPE: self.model_type,
                 _DiverseCFV1SchemaConstants.DESIRED_CLASS: self.desired_class,
                 _DiverseCFV1SchemaConstants.DESIRED_RANGE: self.desired_range,
+                _DiverseCFV1SchemaConstants.METADATA: self.metadata,
                 _DiverseCFV1SchemaConstants.TEST_INSTANCE_DF: self.test_instance_df,
                 _DiverseCFV1SchemaConstants.FINAL_CFS_DF: df
             }
@@ -216,7 +221,8 @@ class CounterfactualExamples:
                 _DiverseCFV2SchemaConstants.FEATURE_NAMES_INCLUDING_TARGET: feature_names_including_target,
                 _DiverseCFV2SchemaConstants.MODEL_TYPE: self.model_type,
                 _DiverseCFV2SchemaConstants.DESIRED_CLASS: self.desired_class,
-                _DiverseCFV2SchemaConstants.DESIRED_RANGE: self.desired_range
+                _DiverseCFV2SchemaConstants.DESIRED_RANGE: self.desired_range,
+                _DiverseCFV2SchemaConstants.METADATA: self.metadata
             }
             return json.dumps(alternate_obj, default=json_converter)
 
@@ -240,7 +246,8 @@ class CounterfactualExamples:
                                           posthoc_sparsity_param=None,
                                           desired_class=cf_example_dict[_DiverseCFV1SchemaConstants.DESIRED_CLASS],
                                           desired_range=cf_example_dict[_DiverseCFV1SchemaConstants.DESIRED_RANGE],
-                                          model_type=cf_example_dict[_DiverseCFV1SchemaConstants.MODEL_TYPE])
+                                          model_type=cf_example_dict[_DiverseCFV1SchemaConstants.MODEL_TYPE],
+                                          metadata=cf_example_dict.get(_DiverseCFV1SchemaConstants.METADATA))
         else:
             final_cfs_list = cf_example_dict[_DiverseCFV2SchemaConstants.FINAL_CFS_LIST]
             test_instance_list = cf_example_dict[_DiverseCFV2SchemaConstants.TEST_INSTANCE_LIST]
@@ -267,4 +274,5 @@ class CounterfactualExamples:
                                           posthoc_sparsity_param=None,
                                           desired_class=desired_class,
                                           desired_range=desired_range,
-                                          model_type=model_type)
+                                          model_type=model_type,
+                                          metadata=cf_example_dict.get(_DiverseCFV2SchemaConstants.METADATA))

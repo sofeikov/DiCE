@@ -79,7 +79,8 @@ class DiceGenetic(ExplainerBase):
                         feature_weights_list.append(round(1 / self.feature_range[feature].max(), 2))
             self.feature_weights_list = [feature_weights_list]
 
-    def do_random_init(self, num_inits, features_to_vary, query_instance, desired_class, desired_range):
+    def do_random_init(self, num_inits, features_to_vary, query_instance, desired_class, desired_range,
+                       best_effort=False):
         remaining_cfs = np.zeros((num_inits, self.data_interface.number_of_features))
         # kx is the number of valid inits found so far
         kx = 0
@@ -95,12 +96,12 @@ class DiceGenetic(ExplainerBase):
                         one_init[jx] = np.random.choice(self.feature_range[feature])
                 else:
                     one_init[jx] = query_instance[jx]
-            if self.is_cf_valid(self.predict_fn_scores(one_init)):
+            if best_effort or self.is_cf_valid(self.predict_fn_scores(one_init)):
                 remaining_cfs[kx] = one_init
                 kx += 1
         return remaining_cfs
 
-    def do_KD_init(self, features_to_vary, query_instance, cfs, desired_class, desired_range):
+    def do_KD_init(self, features_to_vary, query_instance, cfs, desired_class, desired_range, best_effort=False):
         cfs = self.label_encode(cfs)
         cfs = cfs.reset_index(drop=True)
 
@@ -138,12 +139,13 @@ class DiceGenetic(ExplainerBase):
 
         if len(uniques) != self.population_size:
             remaining_cfs = self.do_random_init(
-                self.population_size - len(uniques), features_to_vary, query_instance, desired_class, desired_range)
+                self.population_size - len(uniques), features_to_vary, query_instance, desired_class, desired_range,
+                best_effort)
             self.cfs = np.concatenate([uniques, remaining_cfs])
 
     def do_cf_initializations(self, total_CFs, initialization, algorithm, features_to_vary, desired_range,
                               desired_class,
-                              query_instance, query_instance_df_dummies, verbose):
+                              query_instance, query_instance_df_dummies, verbose, best_effort=False):
         """Intializes CFs and other related variables."""
         self.cf_init_weights = [total_CFs, algorithm, features_to_vary]
 
@@ -162,7 +164,7 @@ class DiceGenetic(ExplainerBase):
         self.cfs = []
         if initialization == 'random':
             self.cfs = self.do_random_init(
-                self.population_size, features_to_vary, query_instance, desired_class, desired_range)
+                self.population_size, features_to_vary, query_instance, desired_class, desired_range, best_effort)
 
         elif initialization == 'kdtree':
             # Partitioned dataset and KD Tree for each class (binary) of the dataset
@@ -171,13 +173,14 @@ class DiceGenetic(ExplainerBase):
                                    desired_range, desired_class, self.predicted_outcome_name)
             if self.KD_tree is None:
                 self.cfs = self.do_random_init(
-                    self.population_size, features_to_vary, query_instance, desired_class, desired_range)
+                    self.population_size, features_to_vary, query_instance, desired_class, desired_range, best_effort)
 
             else:
                 num_queries = min(len(self.dataset_with_predictions), self.population_size * self.total_CFs)
                 indices = self.KD_tree.query(query_instance_df_dummies, num_queries)[1][0]
                 KD_tree_output = self.dataset_with_predictions.iloc[indices].copy()
-                self.do_KD_init(features_to_vary, query_instance, KD_tree_output, desired_class, desired_range)
+                self.do_KD_init(features_to_vary, query_instance, KD_tree_output, desired_class, desired_range,
+                                best_effort)
 
         if verbose:
             print("Initialization complete! Generating counterfactuals...")
@@ -185,7 +188,8 @@ class DiceGenetic(ExplainerBase):
     def do_param_initializations(self, total_CFs, initialization, desired_range, desired_class,
                                  query_instance, query_instance_df_dummies, algorithm, features_to_vary,
                                  permitted_range, yloss_type, diversity_loss_type, feature_weights,
-                                 proximity_weight, sparsity_weight, diversity_weight, categorical_penalty, verbose):
+                                 proximity_weight, sparsity_weight, diversity_weight, categorical_penalty, verbose,
+                                 best_effort=False):
         if verbose:
             print("Initializing initial parameters to the genetic algorithm...")
 
@@ -193,7 +197,7 @@ class DiceGenetic(ExplainerBase):
         if len(self.cfs) != total_CFs:
             self.do_cf_initializations(
                 total_CFs, initialization, algorithm, features_to_vary, desired_range, desired_class,
-                query_instance, query_instance_df_dummies, verbose)
+                query_instance, query_instance_df_dummies, verbose, best_effort)
         else:
             self.total_CFs = total_CFs
         self.do_loss_initializations(yloss_type, diversity_loss_type, feature_weights, encoding='label')
@@ -205,7 +209,8 @@ class DiceGenetic(ExplainerBase):
                                   algorithm="DiverseCF", features_to_vary="all", permitted_range=None,
                                   yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist",
                                   feature_weights="inverse_mad", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
-                                  posthoc_sparsity_algorithm="binary", maxiterations=500, thresh=1e-2, verbose=False):
+                                  posthoc_sparsity_algorithm="binary", maxiterations=500, thresh=1e-2, verbose=False,
+                                  best_effort=False):
         """Generates diverse counterfactual explanations
 
         :param query_instance: A dictionary of feature names and values. Test point of interest.
@@ -242,10 +247,14 @@ class DiceGenetic(ExplainerBase):
         :param thresh: The genetic algorithm stops when the difference between the previous best loss and current
                        best loss is less than thresh
         :param verbose: Parameter to determine whether to print 'Diverse Counterfactuals found!'
+        :param best_effort: When True, explicitly returns the closest evolved candidates when the target threshold is
+                            unreachable under the current search budget.
 
         :return: A CounterfactualExamples object to store and visualize the resulting counterfactual explanations
                  (see diverse_counterfactuals.py).
         """
+        if not isinstance(best_effort, bool):
+            raise UserConfigValidationException("The best_effort parameter should be a boolean.")
 
         if not hasattr(self.data_interface, 'data_df') and initialization == "kdtree":
             raise UserConfigValidationException(
@@ -287,10 +296,12 @@ class DiceGenetic(ExplainerBase):
         self.do_param_initializations(total_CFs, initialization, desired_range, desired_class, query_instance,
                                       query_instance_df_dummies, algorithm, features_to_vary, permitted_range,
                                       yloss_type, diversity_loss_type, feature_weights, proximity_weight,
-                                      sparsity_weight, diversity_weight, categorical_penalty, verbose)
+                                      sparsity_weight, diversity_weight, categorical_penalty, verbose, best_effort)
 
-        query_instance_df = self.find_counterfactuals(query_instance, desired_range, desired_class, features_to_vary,
-                                                      maxiterations, thresh, verbose)
+        query_instance_df, constraints_satisfied = self.find_counterfactuals(
+            query_instance, desired_range, desired_class, features_to_vary, maxiterations, thresh, verbose,
+            best_effort
+        )
 
         desired_class_param = self.decode_model_output(pd.Series([self.target_cf_class]))[0] \
             if hasattr(self, 'target_cf_class') else desired_class
@@ -301,7 +312,11 @@ class DiceGenetic(ExplainerBase):
                                           posthoc_sparsity_param=posthoc_sparsity_param,
                                           desired_range=desired_range,
                                           desired_class=desired_class_param,
-                                          model_type=self.model.model_type)
+                                          model_type=self.model.model_type,
+                                          metadata=self.build_counterfactual_metadata(
+                                              self.cfs_pred_scores if self.cfs_pred_scores is not None else [],
+                                              best_effort,
+                                              constraints_satisfied))
 
     def predict_fn_scores(self, input_instance):
         """Returns prediction scores."""
@@ -428,7 +443,7 @@ class DiceGenetic(ExplainerBase):
         return one_init
 
     def find_counterfactuals(self, query_instance, desired_range, desired_class,
-                             features_to_vary, maxiterations, thresh, verbose):
+                             features_to_vary, maxiterations, thresh, verbose, best_effort):
         """Finds counterfactuals by generating cfs through the genetic algorithm"""
         population = self.cfs.copy()
         iterations = 0
@@ -493,21 +508,10 @@ class DiceGenetic(ExplainerBase):
                 raise SystemError("The number of total_Cfs is greater than the population size!")
             iterations += 1
 
-        self.cfs_preds = []
-        self.final_cfs = []
-        i = 0
-        while i < self.total_CFs:
-            predictions = self.predict_fn_scores(population[i])[0]
-            if self.is_cf_valid(predictions):
-                self.final_cfs.append(population[i])
-                # checking if predictions is a float before taking the length as len() works only for array-like
-                # elements. isinstance(predictions, (np.floating, float)) checks if it's any float (numpy or otherwise)
-                # We do this as we take the argmax if the prediction is a vector -- like the output of a classifier
-                if not isinstance(predictions, (np.floating, float)) and len(predictions) > 1:
-                    self.cfs_preds.append(np.argmax(predictions))
-                else:
-                    self.cfs_preds.append(predictions)
-            i += 1
+        self.final_cfs, self.cfs_pred_scores, constraints_satisfied = self._select_counterfactuals_from_population(
+            population, best_effort
+        )
+        self.cfs_preds = self.get_model_output_from_scores(self.cfs_pred_scores) if len(self.cfs_pred_scores) > 0 else []
 
         # converting to dataframe
         query_instance_df = self.label_decode(query_instance)
@@ -537,7 +541,34 @@ class DiceGenetic(ExplainerBase):
                       'change the query instance or the features to vary...'  '; total time taken: %02d' % m,
                       'min %02d' % s, 'sec')
 
-        return query_instance_df
+        return query_instance_df, constraints_satisfied
+
+    def _select_counterfactuals_from_population(self, population, best_effort):
+        final_cfs = []
+        cfs_pred_scores = []
+        constraints_satisfied = []
+        best_effort_candidates = []
+
+        for candidate in population:
+            predictions = self.predict_fn_scores(candidate)[0]
+            if self.is_cf_valid(predictions):
+                if len(final_cfs) < self.total_CFs:
+                    final_cfs.append(candidate)
+                    cfs_pred_scores.append(predictions)
+                    constraints_satisfied.append(True)
+            elif best_effort:
+                best_effort_candidates.append((self.get_distance_from_target(predictions), candidate, predictions))
+
+        if best_effort and len(final_cfs) < self.total_CFs:
+            best_effort_candidates.sort(key=lambda item: item[0])
+            for _, candidate, predictions in best_effort_candidates:
+                if len(final_cfs) == self.total_CFs:
+                    break
+                final_cfs.append(candidate)
+                cfs_pred_scores.append(predictions)
+                constraints_satisfied.append(True)
+
+        return final_cfs, cfs_pred_scores, constraints_satisfied
 
     def label_encode(self, input_instance):
         for column in self.data_interface.categorical_feature_names:
