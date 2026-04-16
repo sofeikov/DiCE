@@ -38,9 +38,10 @@ class DiceRandom(ExplainerBase):
 
     def _generate_counterfactuals(self, query_instance, total_CFs, desired_range=None,
                                   desired_class="opposite", permitted_range=None,
-                                  features_to_vary="all", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
+                                  features_to_vary="all", stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", sample_size=1000, random_seed=None, verbose=False,
-                                  limit_steps_ls=10000, best_effort=False):
+                                  limit_steps_ls=10000, best_effort=False,
+                                  desired_class_probability_delta=None):
         """Generate counterfactuals by randomly sampling features.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe.
@@ -53,6 +54,7 @@ class DiceRandom(ExplainerBase):
                                 initialized in data_interface.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
+                                   Defaults to 0.5 when not provided.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
                                            Prefer binary search when a feature range is large
@@ -63,6 +65,10 @@ class DiceRandom(ExplainerBase):
         :param limit_steps_ls: Defines an upper limit for the linear search step in the posthoc_sparsity_enhancement
         :param best_effort: When True, explicitly returns the closest sampled candidates when none of the sampled
                             points satisfy the requested target threshold.
+        :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
+                                                DiCE resolves the effective target threshold per query as the current
+                                                desired-class score plus this delta. Classification only; cannot be
+                                                combined with ``stopping_threshold``.
 
         :returns: A CounterfactualExamples object that contains the dataframe of generated counterfactuals as an attribute.
         """
@@ -92,12 +98,21 @@ class DiceRandom(ExplainerBase):
         test_pred = model_predictions[0]
         if self.model.model_type == ModelTypes.Classifier:
             self.target_cf_class = self.infer_target_cfs_class(desired_class, test_pred, self.num_output_nodes)
+            self.stopping_threshold = self._resolve_target_class_stopping_threshold(
+                stopping_threshold=stopping_threshold,
+                desired_class_probability_delta=desired_class_probability_delta,
+                test_pred=test_pred,
+            )
         elif self.model.model_type == ModelTypes.Regressor:
+            if desired_class_probability_delta is not None:
+                raise UserConfigValidationException(
+                    'The desired_class_probability_delta parameter should not be set for regression task'
+                )
+            self.desired_class_probability_delta = None
             self.target_cf_range = self.infer_target_cfs_range(desired_range)
+            self.stopping_threshold = self._resolve_requested_stopping_threshold(stopping_threshold)
         # fixing features that are to be fixed
         self.total_CFs = total_CFs
-
-        self.stopping_threshold = stopping_threshold
 
         # get random samples for each feature independently
         start_time = timeit.default_timer()

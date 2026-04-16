@@ -34,8 +34,9 @@ class Dice(ExplainerBase):
     def _generate_counterfactuals(self, query_instance, total_CFs,
                                   desired_class="opposite", desired_range=None,
                                   permitted_range=None, features_to_vary="all",
-                                  stopping_threshold=0.5, posthoc_sparsity_param=0.1,
-                                  posthoc_sparsity_algorithm="linear", verbose=False, **kwargs):
+                                  stopping_threshold=None, posthoc_sparsity_param=0.1,
+                                  posthoc_sparsity_algorithm="linear", verbose=False,
+                                  desired_class_probability_delta=None, **kwargs):
         raise NotImplementedError("This method should be implemented by the concrete classes "
                                   "that inherit from ExplainerBase")
 

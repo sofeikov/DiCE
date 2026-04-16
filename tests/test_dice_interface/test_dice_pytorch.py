@@ -145,6 +145,39 @@ class TestDiceTorchMethods:
             abs=1e-4,
         )
 
+    def test_supports_desired_class_probability_delta(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        scores = [
+            np.array([0.36], dtype=np.float32),
+            np.array([0.43], dtype=np.float32),
+        ]
+
+        def fake_predict_fn(_):
+            if scores:
+                return scores.pop(0)
+            return np.array([0.43], dtype=np.float32)
+
+        monkeypatch.setattr(self.exp, "predict_fn", fake_predict_fn)
+        monkeypatch.setattr(self.exp, "stop_loop", lambda *_: True)
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            sample_adultincome_query,
+            total_CFs=1,
+            desired_class=1,
+            desired_class_probability_delta=0.07,
+            posthoc_sparsity_param=0,
+        )
+
+        cf_metadata = counterfactual_explanations.cf_examples_list[0].metadata
+        assert self.exp.stopping_threshold == pytest.approx(0.43)
+        assert cf_metadata["desired_class_probability_delta"] == pytest.approx(0.07)
+        assert cf_metadata["counterfactual_target_scores"] == pytest.approx([0.43], abs=1e-4)
+        assert cf_metadata["counterfactual_is_valid"] == [True]
+
     def test_multiclass_output_preserves_predicted_class_semantics(
         self,
         monkeypatch,

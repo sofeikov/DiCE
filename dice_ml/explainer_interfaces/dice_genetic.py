@@ -208,9 +208,9 @@ class DiceGenetic(ExplainerBase):
                                   sparsity_weight=0.2, diversity_weight=5.0, categorical_penalty=0.1,
                                   algorithm="DiverseCF", features_to_vary="all", permitted_range=None,
                                   yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist",
-                                  feature_weights="inverse_mad", stopping_threshold=0.5, posthoc_sparsity_param=0.1,
+                                  feature_weights="inverse_mad", stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="binary", maxiterations=500, thresh=1e-2, verbose=False,
-                                  best_effort=False):
+                                  best_effort=False, desired_class_probability_delta=None):
         """Generates diverse counterfactual explanations
 
         :param query_instance: A dictionary of feature names and values. Test point of interest.
@@ -238,6 +238,7 @@ class DiceGenetic(ExplainerBase):
                                 of the feature's values in the training set; the weight for a categorical feature is
                                 equal to 1 by default.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
+                                   Defaults to 0.5 when not provided.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
                                            Prefer binary search when a feature range is large
@@ -249,6 +250,10 @@ class DiceGenetic(ExplainerBase):
         :param verbose: Parameter to determine whether to print 'Diverse Counterfactuals found!'
         :param best_effort: When True, explicitly returns the closest evolved candidates when the target threshold is
                             unreachable under the current search budget.
+        :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
+                                                DiCE resolves the effective target threshold per query as the current
+                                                desired-class score plus this delta. Classification only; cannot be
+                                                combined with ``stopping_threshold``.
 
         :return: A CounterfactualExamples object to store and visualize the resulting counterfactual explanations
                  (see diverse_counterfactuals.py).
@@ -286,7 +291,13 @@ class DiceGenetic(ExplainerBase):
         test_pred = self.predict_fn_scores(query_instance)
 
         self.test_pred = test_pred
-        desired_class = self.misc_init(stopping_threshold, desired_class, desired_range, test_pred[0])
+        desired_class = self.misc_init(
+            stopping_threshold,
+            desired_class,
+            desired_range,
+            test_pred[0],
+            desired_class_probability_delta=desired_class_probability_delta,
+        )
 
         query_instance_df_dummies = pd.get_dummies(query_instance_orig)
         for col in self.data_interface.get_all_dummy_colnames():

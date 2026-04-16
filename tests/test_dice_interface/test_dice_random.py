@@ -117,6 +117,37 @@ class TestDiceRandomBinaryClassificationMethods:
         assert self.exp.stopping_threshold == pytest.approx(stopping_threshold)
         assert self.exp.cfs_pred_scores[0][desired_class] == pytest.approx(expected_target_score, abs=1e-4)
 
+    def test_random_supports_desired_class_probability_delta(
+        self,
+        monkeypatch,
+        sample_custom_query_1,
+    ):
+        query_score = np.array([0.64, 0.36], dtype=np.float32)
+        counterfactual_score = np.array([0.57, 0.43], dtype=np.float32)
+
+        def fake_predict_fn(input_instance):
+            if input_instance is sample_custom_query_1:
+                return query_score.reshape(1, -1)
+            return np.tile(counterfactual_score.reshape(1, -1), (len(input_instance), 1))
+
+        monkeypatch.setattr(self.exp, "predict_fn", fake_predict_fn)
+
+        counterfactual_examples = self.exp._generate_counterfactuals(
+            query_instance=sample_custom_query_1,
+            total_CFs=1,
+            desired_class=1,
+            desired_class_probability_delta=0.07,
+            sample_size=10,
+            random_seed=0,
+            posthoc_sparsity_param=0,
+        )
+
+        assert counterfactual_examples.final_cfs_df is not None
+        assert len(counterfactual_examples.final_cfs_df) == 1
+        assert self.exp.stopping_threshold == pytest.approx(0.43)
+        assert counterfactual_examples.metadata["desired_class_probability_delta"] == pytest.approx(0.07)
+        assert counterfactual_examples.metadata["counterfactual_target_scores"] == pytest.approx([0.43], abs=1e-4)
+
     def test_random_best_effort_returns_sampled_nearest_miss(
         self,
         monkeypatch,

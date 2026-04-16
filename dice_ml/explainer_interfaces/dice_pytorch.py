@@ -53,9 +53,10 @@ class DicePyTorch(ExplainerBase):
                                   permitted_range=None, yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist",
                                   feature_weights="inverse_mad", optimizer="pytorch:adam", learning_rate=0.05, min_iter=500,
                                   max_iter=5000, project_iter=0, loss_diff_thres=1e-5, loss_converge_maxiter=1, verbose=False,
-                                  init_near_query_instance=True, tie_random=False, stopping_threshold=0.5,
+                                  init_near_query_instance=True, tie_random=False, stopping_threshold=None,
                                   posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
-                                  limit_steps_ls=10000, best_effort=False):
+                                  limit_steps_ls=10000, best_effort=False,
+                                  desired_class_probability_delta=None):
         """Generates diverse counterfactual explanations.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe
@@ -91,6 +92,7 @@ class DicePyTorch(ExplainerBase):
         :param init_near_query_instance: Boolean to indicate if counterfactuals are to be initialized near query_instance.
         :param tie_random: Used in rounding off CFs and intermediate projection.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
+                                   Defaults to 0.5 when not provided.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
                                            Prefer binary search when a feature range is large
@@ -100,6 +102,10 @@ class DicePyTorch(ExplainerBase):
         :param best_effort: When True, explicitly keeps and returns the closest available optimization result even if
                             it does not satisfy the requested stopping_threshold. Returned metadata indicates whether
                             each counterfactual met the threshold or is a best-effort approximation.
+        :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
+                                                DiCE resolves the effective target threshold per query as the current
+                                                desired-class score plus this delta. Classification only; cannot be
+                                                combined with ``stopping_threshold``.
 
         :return: A CounterfactualExamples object to store and visualize the resulting
                  counterfactual explanations (see diverse_counterfactuals.py).
@@ -133,7 +139,7 @@ class DicePyTorch(ExplainerBase):
                 query_instance, desired_class, optimizer, learning_rate, min_iter, max_iter,
                 project_iter, loss_diff_thres, loss_converge_maxiter, verbose, init_near_query_instance,
                 tie_random, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm,
-                limit_steps_ls, best_effort)
+                limit_steps_ls, best_effort, desired_class_probability_delta)
 
         desired_class_param = desired_class
         if self.model.model_type == ModelTypes.Classifier:
@@ -526,7 +532,8 @@ class DicePyTorch(ExplainerBase):
     def find_counterfactuals(self, query_instance, desired_class, optimizer, learning_rate, min_iter,
                              max_iter, project_iter, loss_diff_thres, loss_converge_maxiter, verbose,
                              init_near_query_instance, tie_random, stopping_threshold, posthoc_sparsity_param,
-                             posthoc_sparsity_algorithm, limit_steps_ls, best_effort):
+                             posthoc_sparsity_algorithm, limit_steps_ls, best_effort,
+                             desired_class_probability_delta):
         """Finds counterfactuals by gradient-descent."""
         query_instance = self.model.transformer.transform(query_instance).to_numpy(dtype=np.float64)[0]
         self.x1 = torch.tensor(query_instance)
@@ -546,7 +553,11 @@ class DicePyTorch(ExplainerBase):
         self.loss_converge_iter = 0
         self.converged = False
 
-        self.stopping_threshold = stopping_threshold
+        self.stopping_threshold = self._resolve_target_class_stopping_threshold(
+            stopping_threshold=stopping_threshold,
+            desired_class_probability_delta=desired_class_probability_delta,
+            test_pred=test_pred,
+        )
 
         # to resolve tie - if multiple levels of an one-hot-encoded categorical variable take value 1
         self.tie_random = tie_random
