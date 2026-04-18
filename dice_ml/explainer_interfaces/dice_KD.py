@@ -52,7 +52,7 @@ class DiceKD(ExplainerBase):
                                   permitted_range=None, sparsity_weight=1,
                                   feature_weights="inverse_mad", stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", verbose=False, limit_steps_ls=10000,
-                                  best_effort=False, desired_class_probability_delta=None):
+                                  best_effort=False, desired_class_probability_delta=None, permitted_direction=None):
         """Generates diverse counterfactual explanations
 
         :param query_instance: A dictionary of feature names and values. Test point of interest.
@@ -64,6 +64,8 @@ class DiceKD(ExplainerBase):
         :param permitted_range: Dictionary with continuous feature names as keys and permitted min-max range in
                                 list as values. Defaults to the range inferred from training data.
                                 If None, uses the parameters initialized in data_interface.
+        :param permitted_direction: Dictionary with continuous feature names as keys and values
+                                    ``"increase"`` or ``"decrease"``.
         :param sparsity_weight: Parameter to determine how much importance to give to sparsity
         :param feature_weights: Either "inverse_mad" or a dictionary with feature names as keys and corresponding
                                 weights as values. Default option is "inverse_mad" where the weight for a continuous
@@ -94,7 +96,10 @@ class DiceKD(ExplainerBase):
 
         data_df_copy = self.data_interface.data_df.copy()
 
-        features_to_vary = self.setup(features_to_vary, permitted_range, query_instance, feature_weights)
+        features_to_vary = self.setup(
+            features_to_vary, permitted_range, query_instance, feature_weights,
+            permitted_direction=permitted_direction
+        )
 
         # Prepares user defined query_instance for DiCE.
         query_instance_orig = query_instance.copy()

@@ -57,14 +57,15 @@ class DicePyTorch(ExplainerBase):
                                   desired_class="opposite", desired_range=None,
                                   proximity_weight=0.5,
                                   diversity_weight=1.0, categorical_penalty=0.1, algorithm="DiverseCF", features_to_vary="all",
-                                  permitted_range=None, yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist",
+                                  permitted_range=None,
+                                  yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist",
                                   feature_weights="inverse_mad", optimizer="pytorch:adam", learning_rate=0.05, min_iter=500,
                                   max_iter=5000, project_iter=0, loss_diff_thres=1e-5, loss_converge_maxiter=1, verbose=False,
                                   init_near_query_instance=True, tie_random=False, stopping_threshold=None,
                                   posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
                                   limit_steps_ls=10000, best_effort=False,
                                   desired_class_probability_delta=None,
-                                  counterfactual_selection_strategy=None):
+                                  counterfactual_selection_strategy=None, permitted_direction=None):
         """Generates diverse counterfactual explanations.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe
@@ -81,6 +82,8 @@ class DicePyTorch(ExplainerBase):
         :param permitted_range: Dictionary with continuous feature names as keys and permitted min-max range in list as values.
                                Defaults to the range inferred from training data. If None, uses the parameters initialized in
                                data_interface.
+        :param permitted_direction: Dictionary with continuous feature names as keys and values
+                                    ``"increase"`` or ``"decrease"``.
         :param yloss_type: Metric for y-loss of the optimization function. Takes "l2_loss" or "log_loss" or "hinge_loss".
         :param diversity_loss_type: Metric for diversity loss of the optimization function.
                                     Takes "avg_dist" or "dpp_style:inverse_dist".
@@ -133,29 +136,29 @@ class DicePyTorch(ExplainerBase):
         if feature_weights == "inverse_mad":
             self.data_interface.get_valid_mads(display_warnings=True, return_mads=False)
 
-        # check permitted range for continuous features
-        if permitted_range is not None:
-            self.data_interface.permitted_range = permitted_range
-            self.minx, self.maxx = self.data_interface.get_minx_maxx(normalized=True)
-            self.cont_minx = []
-            self.cont_maxx = []
-            for feature in self.data_interface.continuous_feature_names:
-                self.cont_minx.append(self.data_interface.permitted_range[feature][0])
-                self.cont_maxx.append(self.data_interface.permitted_range[feature][1])
+        original_permitted_range = copy.deepcopy(self.data_interface.permitted_range)
+        features_to_vary = self.setup(
+            features_to_vary, permitted_range, query_instance, feature_weights,
+            permitted_direction=permitted_direction
+        )
+        self.check_permitted_range(self.feature_range)
 
-        if [total_CFs, algorithm, features_to_vary] != self.cf_init_weights:
-            self.do_cf_initializations(total_CFs, algorithm, features_to_vary)
-        if [yloss_type, diversity_loss_type, feature_weights] != self.loss_weights:
-            self.do_loss_initializations(yloss_type, diversity_loss_type, feature_weights)
-        if [proximity_weight, diversity_weight, categorical_penalty] != self.hyperparameters:
-            self.update_hyperparameters(proximity_weight, diversity_weight, categorical_penalty)
+        try:
+            if [total_CFs, algorithm, features_to_vary] != self.cf_init_weights:
+                self.do_cf_initializations(total_CFs, algorithm, features_to_vary)
+            if [yloss_type, diversity_loss_type, feature_weights] != self.loss_weights:
+                self.do_loss_initializations(yloss_type, diversity_loss_type, feature_weights)
+            if [proximity_weight, diversity_weight, categorical_penalty] != self.hyperparameters:
+                self.update_hyperparameters(proximity_weight, diversity_weight, categorical_penalty)
 
-        final_cfs_df, test_instance_df, final_cfs_df_sparse = \
-            self.find_counterfactuals(
-                query_instance, desired_class, optimizer, learning_rate, min_iter, max_iter,
-                project_iter, loss_diff_thres, loss_converge_maxiter, verbose, init_near_query_instance,
-                tie_random, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm,
-                limit_steps_ls, best_effort, desired_class_probability_delta)
+            final_cfs_df, test_instance_df, final_cfs_df_sparse = \
+                self.find_counterfactuals(
+                    query_instance, desired_class, optimizer, learning_rate, min_iter, max_iter,
+                    project_iter, loss_diff_thres, loss_converge_maxiter, verbose, init_near_query_instance,
+                    tie_random, stopping_threshold, posthoc_sparsity_param, posthoc_sparsity_algorithm,
+                    limit_steps_ls, best_effort, desired_class_probability_delta)
+        finally:
+            self.check_permitted_range(original_permitted_range)
 
         desired_class_param = desired_class
         if self.model.model_type == ModelTypes.Classifier:
@@ -421,6 +424,13 @@ class DicePyTorch(ExplainerBase):
         else:
             return temp_cfs
 
+    def _project_cfs_to_bounds(self):
+        for ix in range(self.total_CFs):
+            for jx in range(len(self.minx[0])):
+                self.cfs[ix].data[jx] = torch.clamp(
+                    self.cfs[ix][jx], min=self.minx[0][jx], max=self.maxx[0][jx]
+                )
+
     def stop_loop(self, itr, loss_diff):
         """Determines the stopping condition for gradient descent."""
 
@@ -650,6 +660,7 @@ class DicePyTorch(ExplainerBase):
                 self.initialize_CFs(query_instance, False)
             else:
                 self.initialize_CFs(query_instance, init_near_query_instance)
+            self._project_cfs_to_bounds()
 
             # initialize optimizer
             self.do_optimizer_initializations(optimizer, learning_rate)
@@ -678,9 +689,7 @@ class DicePyTorch(ExplainerBase):
                 self.optimizer.step()
 
                 # projection step
-                for ix in range(self.total_CFs):
-                    for jx in range(len(self.minx[0])):
-                        self.cfs[ix].data[jx] = torch.clamp(self.cfs[ix][jx], min=self.minx[0][jx], max=self.maxx[0][jx])
+                self._project_cfs_to_bounds()
 
                 if verbose:
                     if (iterations) % 50 == 0:

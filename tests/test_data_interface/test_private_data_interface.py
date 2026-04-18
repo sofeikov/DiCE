@@ -1,6 +1,7 @@
 from collections import OrderedDict
 
 import pytest
+from raiutils.exceptions import UserConfigValidationException
 
 import dice_ml
 
@@ -37,3 +38,18 @@ class TestPrivateDataMethods:
         # feature precision decides the least change that can be made to the feature in optimization,
         # given as 2-decimal place for 'hours_per_week' feature while initiating private Data object.
         assert self.d.get_decimal_precisions()[1] == 2
+
+    @pytest.mark.parametrize(
+        ('permitted_direction', 'match'),
+        [
+            ({'not_a_feature': 'increase'}, "Got features {'not_a_feature'} which are not present in training data"),
+            ({'workclass': 'increase'}, "direction constraints are supported only for continuous features"),
+            ({'age': 'sideways'}, "Got invalid direction constraints"),
+        ],
+    )
+    def test_check_permitted_direction(self, permitted_direction, match):
+        with pytest.raises(UserConfigValidationException, match=match):
+            self.d.check_permitted_direction(permitted_direction=permitted_direction)
+
+    def test_normalize_permitted_direction(self):
+        assert self.d.normalize_permitted_direction({'age': 'Decreasing'}) == {'age': 'decrease'}

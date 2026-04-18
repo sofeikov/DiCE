@@ -38,10 +38,11 @@ class DiceRandom(ExplainerBase):
 
     def _generate_counterfactuals(self, query_instance, total_CFs, desired_range=None,
                                   desired_class="opposite", permitted_range=None,
-                                  features_to_vary="all", stopping_threshold=None, posthoc_sparsity_param=0.1,
+                                  features_to_vary="all", stopping_threshold=None,
+                                  posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", sample_size=1000, random_seed=None, verbose=False,
                                   limit_steps_ls=10000, best_effort=False,
-                                  desired_class_probability_delta=None):
+                                  desired_class_probability_delta=None, permitted_direction=None):
         """Generate counterfactuals by randomly sampling features.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe.
@@ -52,6 +53,8 @@ class DiceRandom(ExplainerBase):
         :param permitted_range: Dictionary with feature names as keys and permitted range in list as values.
                                 Defaults to the range inferred from training data. If None, uses the parameters
                                 initialized in data_interface.
+        :param permitted_direction: Dictionary with continuous feature names as keys and values
+                                    ``"increase"`` or ``"decrease"``.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
                                    Defaults to 0.5 when not provided.
@@ -75,7 +78,10 @@ class DiceRandom(ExplainerBase):
         if not isinstance(best_effort, bool):
             raise UserConfigValidationException("The best_effort parameter should be a boolean.")
 
-        self.features_to_vary = self.setup(features_to_vary, permitted_range, query_instance, feature_weights=None)
+        self.features_to_vary = self.setup(
+            features_to_vary, permitted_range, query_instance, feature_weights=None,
+            permitted_direction=permitted_direction
+        )
 
         if features_to_vary == "all":
             self.fixed_features_values = {}

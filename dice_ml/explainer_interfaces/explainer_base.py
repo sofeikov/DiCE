@@ -2,6 +2,7 @@
    Subclasses implement interfaces for different ML frameworks such as PyTorch.
    All methods are in dice_ml.explainer_interfaces"""
 
+import copy
 import inspect
 import pickle
 import warnings
@@ -76,7 +77,7 @@ class ExplainerBase(ABC):
             permitted_range=None, features_to_vary="all",
             stopping_threshold=None, posthoc_sparsity_param=0.1,
             posthoc_sparsity_algorithm="linear", verbose=False,
-            desired_class_probability_delta=None, **kwargs):
+            desired_class_probability_delta=None, permitted_direction=None, **kwargs):
 
         if len(self._find_features_having_missing_values(query_instances)) > 0:
             raise UserConfigValidationException(
@@ -87,6 +88,8 @@ class ExplainerBase(ABC):
         if total_CFs <= 0:
             raise UserConfigValidationException(
                 "The number of counterfactuals generated per query instance (total_CFs) should be a positive integer.")
+
+        self.data_interface.check_permitted_direction(permitted_direction)
 
         if features_to_vary != "all":
             if len(features_to_vary) == 0:
@@ -210,7 +213,7 @@ class ExplainerBase(ABC):
         explainer_kwargs[argument_name] = argument_value
 
     def _invoke_generate_counterfactuals(
-            self, query_instance, total_CFs, desired_class, desired_range, permitted_range,
+            self, query_instance, total_CFs, desired_class, desired_range, permitted_range, permitted_direction,
             features_to_vary, stopping_threshold, posthoc_sparsity_param,
             posthoc_sparsity_algorithm, verbose, desired_class_probability_delta,
             counterfactual_selection_strategy, **kwargs):
@@ -225,6 +228,13 @@ class ExplainerBase(ABC):
             "verbose": verbose,
             **kwargs,
         }
+
+        if permitted_direction is not None:
+            if not self._explainer_supports_argument("_generate_counterfactuals", "permitted_direction"):
+                raise UserConfigValidationException(
+                    "The permitted_direction parameter is not supported by this explainer implementation."
+                )
+            explainer_kwargs["permitted_direction"] = permitted_direction
 
         if desired_class_probability_delta is not None:
             self._add_optional_explainer_argument(
@@ -252,7 +262,7 @@ class ExplainerBase(ABC):
                                  stopping_threshold=None, posthoc_sparsity_param=0.1,
                                  posthoc_sparsity_algorithm="linear", verbose=False,
                                  desired_class_probability_delta=None,
-                                 counterfactual_selection_strategy=None, **kwargs):
+                                 counterfactual_selection_strategy=None, permitted_direction=None, **kwargs):
         """General method for generating counterfactuals.
 
         :param query_instances: Input point(s) for which counterfactuals are to be generated.
@@ -266,6 +276,10 @@ class ExplainerBase(ABC):
         :param permitted_range: Dictionary with feature names as keys and permitted range in list as values.
                                 Defaults to the range inferred from training data.
                                 If None, uses the parameters initialized in data_interface.
+        :param permitted_direction: Dictionary with continuous feature names as keys and values
+                                    ``"increase"`` or ``"decrease"``.
+                                    Constraints are applied relative to each query instance and intersected
+                                    with ``permitted_range`` when both are provided.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
                                    Defaults to 0.5 when not provided.
@@ -309,7 +323,8 @@ class ExplainerBase(ABC):
             total_CFs=total_CFs,
             desired_class=desired_class,
             desired_range=desired_range,
-            permitted_range=permitted_range, features_to_vary=features_to_vary,
+            permitted_range=permitted_range, permitted_direction=permitted_direction,
+            features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm, verbose=verbose,
             desired_class_probability_delta=desired_class_probability_delta,
@@ -331,6 +346,7 @@ class ExplainerBase(ABC):
                 desired_class=desired_class,
                 desired_range=desired_range,
                 permitted_range=permitted_range,
+                permitted_direction=permitted_direction,
                 features_to_vary=features_to_vary,
                 stopping_threshold=stopping_threshold,
                 posthoc_sparsity_param=posthoc_sparsity_param,
@@ -360,7 +376,7 @@ class ExplainerBase(ABC):
                                   stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", verbose=False,
                                   desired_class_probability_delta=None,
-                                  counterfactual_selection_strategy=None, **kwargs):
+                                  counterfactual_selection_strategy=None, permitted_direction=None, **kwargs):
         """Internal method for generating counterfactuals for a given query instance. Any explainerclass
            inherting from this class would need to implement this abstract method.
 
@@ -374,6 +390,10 @@ class ExplainerBase(ABC):
         :param permitted_range: Dictionary with feature names as keys and permitted range in list as values.
                                 Defaults to the range inferred from training data.
                                 If None, uses the parameters initialized in data_interface.
+        :param permitted_direction: Dictionary with continuous feature names as keys and values
+                                    ``"increase"`` or ``"decrease"``.
+                                    Constraints are applied relative to each query instance and intersected
+                                    with ``permitted_range`` when both are provided.
         :param features_to_vary: Either a string "all" or a list of feature names to vary.
         :param stopping_threshold: Minimum threshold for counterfactuals target class probability.
                                    Defaults to 0.5 when not provided.
@@ -397,24 +417,57 @@ class ExplainerBase(ABC):
         """
         pass
 
-    def setup(self, features_to_vary, permitted_range, query_instance, feature_weights):
+    def _resolve_directional_feature_range(self, feature_range, query_instance, permitted_direction):
+        if permitted_direction is None:
+            return feature_range
+
+        adjusted_feature_range = copy.deepcopy(feature_range)
+        for feature, direction in permitted_direction.items():
+            query_value = query_instance[feature].values[0]
+            lower_bound, upper_bound = adjusted_feature_range[feature]
+
+            if direction == 'increase':
+                lower_bound = max(lower_bound, query_value)
+            else:
+                upper_bound = min(upper_bound, query_value)
+
+            if lower_bound > upper_bound and not np.isclose(lower_bound, upper_bound):
+                raise UserConfigValidationException(
+                    "No valid values remain for feature {0} after applying permitted_direction='{1}'.".format(
+                        feature, direction
+                    )
+                )
+
+            adjusted_feature_range[feature] = [lower_bound, upper_bound]
+
+        return adjusted_feature_range
+
+    def setup(self, features_to_vary, permitted_range, query_instance, feature_weights, permitted_direction=None):
         self.data_interface.check_features_to_vary(features_to_vary=features_to_vary)
         self.data_interface.check_permitted_range(permitted_range)
+        self.permitted_direction = self.data_interface.normalize_permitted_direction(permitted_direction)
 
         if features_to_vary == 'all':
             features_to_vary = self.data_interface.feature_names
 
         if permitted_range is None:  # use the precomputed default
-            self.feature_range = self.data_interface.permitted_range
-            feature_ranges_orig = self.feature_range
+            self.feature_range = copy.deepcopy(self.data_interface.permitted_range)
+            feature_ranges_orig = copy.deepcopy(self.feature_range)
         else:  # compute the new ranges based on user input
             self.feature_range, feature_ranges_orig = self.data_interface.get_features_range(permitted_range)
 
-        self.check_query_instance_validity(features_to_vary, permitted_range, query_instance, feature_ranges_orig)
+        self.feature_range = self._resolve_directional_feature_range(
+            self.feature_range, query_instance, self.permitted_direction
+        )
+
+        self.check_query_instance_validity(
+            features_to_vary, permitted_range, self.permitted_direction, query_instance, feature_ranges_orig
+        )
 
         return features_to_vary
 
-    def check_query_instance_validity(self, features_to_vary, permitted_range, query_instance, feature_ranges_orig):
+    def check_query_instance_validity(
+            self, features_to_vary, permitted_range, permitted_direction, query_instance, feature_ranges_orig):
         for feature in query_instance:
             if feature == self.data_interface.outcome_name:
                 raise ValueError("Target", self.data_interface.outcome_name, "present in query instance")
@@ -426,20 +479,29 @@ class ExplainerBase(ABC):
                     str(query_instance[feature].values[0]) not in feature_ranges_orig[feature]:
                 raise ValueError("Feature", feature, "has a value outside the dataset.")
 
-            if feature not in features_to_vary and permitted_range is not None:
-                if feature in permitted_range and feature in self.data_interface.continuous_feature_names:
-                    if not permitted_range[feature][0] <= query_instance[feature].values[0] <= permitted_range[feature][1]:
-                        raise ValueError("Feature:", feature, "is outside the permitted range and isn't allowed to vary.")
-                elif feature in permitted_range and feature in self.data_interface.categorical_feature_names:
-                    if query_instance[feature].values[0] not in self.feature_range[feature]:
-                        raise ValueError("Feature:", feature, "is outside the permitted range and isn't allowed to vary.")
+        if permitted_range is None and permitted_direction is None:
+            return
+
+        for feature in self.data_interface.feature_names:
+            if feature in features_to_vary:
+                continue
+
+            if feature in self.data_interface.continuous_feature_names:
+                if not (
+                    self.feature_range[feature][0]
+                    <= query_instance[feature].values[0]
+                    <= self.feature_range[feature][1]
+                ):
+                    raise ValueError("Feature:", feature, "is outside the permitted range and isn't allowed to vary.")
+            elif query_instance[feature].values[0] not in self.feature_range[feature]:
+                raise ValueError("Feature:", feature, "is outside the permitted range and isn't allowed to vary.")
 
     def local_feature_importance(self, query_instances, cf_examples_list=None,
                                  total_CFs=10,
                                  desired_class="opposite", desired_range=None, permitted_range=None,
                                  features_to_vary="all", stopping_threshold=None,
                                  posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
-                                 desired_class_probability_delta=None, **kwargs):
+                                 desired_class_probability_delta=None, permitted_direction=None, **kwargs):
         """ Estimate local feature importance scores for the given inputs.
 
         :param query_instances: A list of inputs for which to compute the
@@ -461,7 +523,8 @@ class ExplainerBase(ABC):
             total_CFs=total_CFs,
             desired_class=desired_class,
             desired_range=desired_range,
-            permitted_range=permitted_range, features_to_vary=features_to_vary,
+            permitted_range=permitted_range, permitted_direction=permitted_direction,
+            features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
             desired_class_probability_delta=desired_class_probability_delta,
@@ -486,6 +549,7 @@ class ExplainerBase(ABC):
             desired_class=desired_class,
             desired_range=desired_range,
             permitted_range=permitted_range,
+            permitted_direction=permitted_direction,
             features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold,
             posthoc_sparsity_param=posthoc_sparsity_param,
@@ -499,7 +563,7 @@ class ExplainerBase(ABC):
                                   desired_class="opposite", desired_range=None, permitted_range=None,
                                   features_to_vary="all", stopping_threshold=None,
                                   posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
-                                  desired_class_probability_delta=None, **kwargs):
+                                  desired_class_probability_delta=None, permitted_direction=None, **kwargs):
         """ Estimate global feature importance scores for the given inputs.
 
         :param query_instances: A list of inputs for which to compute the
@@ -522,7 +586,8 @@ class ExplainerBase(ABC):
             total_CFs=total_CFs,
             desired_class=desired_class,
             desired_range=desired_range,
-            permitted_range=permitted_range, features_to_vary=features_to_vary,
+            permitted_range=permitted_range, permitted_direction=permitted_direction,
+            features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
             desired_class_probability_delta=desired_class_probability_delta,
@@ -557,6 +622,7 @@ class ExplainerBase(ABC):
             desired_class=desired_class,
             desired_range=desired_range,
             permitted_range=permitted_range,
+            permitted_direction=permitted_direction,
             features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold,
             posthoc_sparsity_param=posthoc_sparsity_param,
@@ -570,7 +636,7 @@ class ExplainerBase(ABC):
                            desired_class="opposite", desired_range=None,
                            permitted_range=None, features_to_vary="all", stopping_threshold=None,
                            posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
-                           desired_class_probability_delta=None, **kwargs):
+                           desired_class_probability_delta=None, permitted_direction=None, **kwargs):
         """ Estimate feature importance scores for the given inputs.
 
         :param query_instances: A list of inputs for which to compute the
@@ -591,7 +657,8 @@ class ExplainerBase(ABC):
             total_CFs=total_CFs,
             desired_class=desired_class,
             desired_range=desired_range,
-            permitted_range=permitted_range, features_to_vary=features_to_vary,
+            permitted_range=permitted_range, permitted_direction=permitted_direction,
+            features_to_vary=features_to_vary,
             stopping_threshold=stopping_threshold, posthoc_sparsity_param=posthoc_sparsity_param,
             posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
             desired_class_probability_delta=desired_class_probability_delta,
@@ -603,6 +670,7 @@ class ExplainerBase(ABC):
                 desired_class=desired_class,
                 desired_range=desired_range,
                 permitted_range=permitted_range,
+                permitted_direction=permitted_direction,
                 features_to_vary=features_to_vary,
                 stopping_threshold=stopping_threshold,
                 posthoc_sparsity_param=posthoc_sparsity_param,
@@ -1035,8 +1103,12 @@ class ExplainerBase(ABC):
             self.cont_minx = []
             self.cont_maxx = []
             for feature in self.data_interface.continuous_feature_names:
-                self.cont_minx.append(self.data_interface.permitted_range[feature][0])
-                self.cont_maxx.append(self.data_interface.permitted_range[feature][1])
+                if hasattr(self.data_interface, 'data_df'):
+                    self.cont_minx.append(self.data_interface.data_df[feature].min())
+                    self.cont_maxx.append(self.data_interface.data_df[feature].max())
+                else:
+                    self.cont_minx.append(self.data_interface.permitted_range[feature][0])
+                    self.cont_maxx.append(self.data_interface.permitted_range[feature][1])
 
     def sigmoid(self, z):
         """This is used in VAE-based CF explainers."""
