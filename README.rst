@@ -187,12 +187,13 @@ This fork documents classifier targeting explicitly.
 * For randomized sampling, genetic, KD-tree, and PyTorch gradient explainers, counterfactual validity is checked against the requested target-class score/probability and the user-provided ``stopping_threshold``.
 * ``desired_class_probability_delta`` lets callers request a relative uplift for the desired-class probability/score instead of an absolute threshold. DiCE resolves the effective target as ``current desired-class score + desired_class_probability_delta`` for each query instance, and caps it at ``1.0`` with a warning when needed.
 * ``desired_class_probability_delta`` is supported only for classification tasks and cannot be combined with ``stopping_threshold``.
+* The PyTorch gradient explainer accepts ``counterfactual_selection_strategy="closest_to_threshold"`` (default) or ``counterfactual_selection_strategy="maximize_desired_class_score"``. The latter ranks candidate counterfactuals by desired-class probability/score instead of closeness to the target threshold.
 * A relative uplift target does not guarantee a class flip on its own. For binary classification, use a large enough delta or an absolute ``stopping_threshold`` above ``0.5`` when the decision boundary itself matters.
 * This differs from original DiCE, which mixes binary-specific threshold checks, threshold coercion in some paths, and argmax-only multiclass validity.
 * Randomized sampling, genetic, and KD-tree explainers keep the returned outcome column as the model-predicted class label/index.
 * The PyTorch gradient explainer keeps its legacy payload shape: binary explanations return the positive-class score, while multiclass explanations return the predicted class index.
 * ``generate_counterfactuals(..., best_effort=True)`` is supported by the PyTorch gradient, random sampling, genetic, and KD-tree explainers.
-* For gradient, random, and genetic explainers, best-effort returns the closest available result when the requested target threshold is unreachable. For KD-tree, best-effort returns the nearest desired-class training points when strict feature constraints prevent enough exact matches.
+* For the PyTorch gradient explainer, best-effort follows the active ``counterfactual_selection_strategy``: threshold proximity by default or desired-class score maximization when requested. Random and genetic explainers return the closest available result when the requested target threshold is unreachable. For KD-tree, best-effort returns the nearest desired-class training points when strict feature constraints prevent enough exact matches.
 * Returned explanations annotate ``cf_examples_list[i].metadata`` with per-counterfactual statuses (``valid`` or ``best_effort``), target-goal distances, target-class scores for classifiers, and ``counterfactual_constraints_satisfied`` so callers can distinguish exact results from approximations.
 * Leaving ``best_effort`` disabled preserves the legacy behavior: these explainers still return only exact counterfactuals and otherwise surface ``No counterfactuals found``.
 
@@ -248,6 +249,17 @@ score without manually converting that request into an absolute threshold.
     dice_exp = exp.generate_counterfactuals(query_instance,
                     total_CFs=4, desired_class="opposite",
                     desired_class_probability_delta=0.07)
+
+If you want gradient-based counterfactuals to maximize the desired-class
+probability/score instead of selecting the candidates that just satisfy the
+requested threshold, set the gradient selection strategy explicitly.
+
+.. code:: python
+
+    dice_exp = exp.generate_counterfactuals(query_instance,
+                    total_CFs=4, desired_class="opposite",
+                    desired_class_probability_delta=0.07,
+                    counterfactual_selection_strategy="maximize_desired_class_score")
 
 Additionally, it may be the case that some features are harder to change than
 others (e.g., education level is harder to change than working hours per week). DiCE allows input of relative difficulty in changing a feature through specifying *feature weights*. A higher feature weight means that the feature is harder to change than others. For instance, one way is to use the mean absolute deviation from the median as a measure of relative difficulty of changing a continuous feature. By default, DiCE computes this internally and divides the distance between continuous features by the MAD of the feature's values in the training set. We can also assign different values through the *feature_weights* parameter. 
