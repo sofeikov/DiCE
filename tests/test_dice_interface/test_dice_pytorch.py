@@ -45,6 +45,34 @@ class TestDiceTorchMethods:
         weights = np.random.rand(len(self.exp.data_interface.ohe_encoded_feature_names))
         self.exp.feature_weights_list = torch.tensor(weights)
 
+    def _configure_gradient_selection_test_doubles(
+        self,
+        monkeypatch,
+        query_score,
+        backup_scores,
+        final_score,
+    ):
+        scores = [query_score] + list(backup_scores) + [final_score]
+
+        def fake_predict_fn(_):
+            next_score = scores.pop(0)
+            return np.array([next_score], dtype=np.float32)
+
+        stop_loop_calls = {"count": 0}
+
+        def fake_stop_loop(*_):
+            should_stop = stop_loop_calls["count"] >= len(backup_scores)
+            stop_loop_calls["count"] += 1
+            return should_stop
+
+        def fake_compute_loss():
+            self.exp.loss = sum(cf.sum() * 0 for cf in self.exp.cfs)
+            return self.exp.loss
+
+        monkeypatch.setattr(self.exp, "predict_fn", fake_predict_fn)
+        monkeypatch.setattr(self.exp, "stop_loop", fake_stop_loop)
+        monkeypatch.setattr(self.exp, "compute_loss", fake_compute_loss)
+
     @pytest.mark.parametrize(("yloss", "output"), [("hinge_loss", 10.8252), ("l2_loss", 0.9999), ("log_loss", 9.8253)])
     def test_yloss(self, yloss, output):
         self.exp.yloss_type = yloss
@@ -177,6 +205,75 @@ class TestDiceTorchMethods:
         assert cf_metadata["desired_class_probability_delta"] == pytest.approx(0.07)
         assert cf_metadata["counterfactual_target_scores"] == pytest.approx([0.43], abs=1e-4)
         assert cf_metadata["counterfactual_is_valid"] == [True]
+
+    def test_gradient_default_selection_prefers_threshold_proximity(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        self._configure_gradient_selection_test_doubles(
+            monkeypatch,
+            query_score=0.36,
+            backup_scores=[0.76, 0.95],
+            final_score=0.60,
+        )
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            sample_adultincome_query,
+            total_CFs=1,
+            desired_class=1,
+            stopping_threshold=0.75,
+            posthoc_sparsity_param=0,
+        )
+
+        cf_example = counterfactual_explanations.cf_examples_list[0]
+        assert cf_example.final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == pytest.approx(0.76, abs=1e-4)
+        assert cf_example.metadata["counterfactual_target_scores"] == pytest.approx([0.76], abs=1e-4)
+        assert cf_example.metadata["counterfactual_selection_strategy"] == "closest_to_threshold"
+
+    def test_gradient_selection_can_maximize_desired_class_score(
+        self,
+        monkeypatch,
+        sample_adultincome_query,
+    ):
+        self.exp.do_cf_initializations(total_CFs=1, algorithm="DiverseCF", features_to_vary="all")
+        self._configure_gradient_selection_test_doubles(
+            monkeypatch,
+            query_score=0.36,
+            backup_scores=[0.76, 0.95],
+            final_score=0.80,
+        )
+
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            sample_adultincome_query,
+            total_CFs=1,
+            desired_class=1,
+            stopping_threshold=0.75,
+            posthoc_sparsity_param=0,
+            counterfactual_selection_strategy="maximize_desired_class_score",
+        )
+
+        cf_example = counterfactual_explanations.cf_examples_list[0]
+        assert cf_example.final_cfs_df[self.exp.data_interface.outcome_name].iloc[0] == pytest.approx(0.95, abs=1e-4)
+        assert cf_example.metadata["counterfactual_target_scores"] == pytest.approx([0.95], abs=1e-4)
+        assert cf_example.metadata["counterfactual_selection_strategy"] == "maximize_desired_class_score"
+
+    def test_gradient_selection_rejects_unknown_strategy(
+        self,
+        sample_adultincome_query,
+    ):
+        with pytest.raises(
+            UserConfigValidationException,
+            match="The counterfactual_selection_strategy should be closest_to_threshold or maximize_desired_class_score",
+        ):
+            self.exp.generate_counterfactuals(
+                sample_adultincome_query,
+                total_CFs=1,
+                desired_class=1,
+                posthoc_sparsity_param=0,
+                counterfactual_selection_strategy="maximize_everything",
+            )
 
     def test_multiclass_output_preserves_predicted_class_semantics(
         self,
