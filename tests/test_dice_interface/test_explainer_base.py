@@ -417,6 +417,32 @@ class TestExplainerBaseBinaryClassification:
                 desired_class_probability_delta=0.07,
             )
 
+    def test_generate_counterfactuals_rejects_permitted_direction_for_legacy_explainer(
+            self, method, sample_custom_query_1, custom_public_data_interface,
+            sklearn_binary_classification_model_interface):
+        exp = dice_ml.Dice(
+            custom_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method='random')
+
+        def legacy_generate_counterfactuals(
+                self, query_instance, total_CFs, desired_class="opposite", desired_range=None,
+                permitted_range=None, features_to_vary="all", stopping_threshold=0.5,
+                posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear", verbose=False):
+            raise AssertionError("legacy explainer should not be invoked when permitted_direction is unsupported")
+
+        exp._generate_counterfactuals = MethodType(legacy_generate_counterfactuals, exp)
+
+        with pytest.raises(
+                UserConfigValidationException,
+                match=r'The permitted_direction parameter is not supported by this explainer implementation.'):
+            exp.generate_counterfactuals(
+                query_instances=sample_custom_query_1,
+                total_CFs=1,
+                desired_class=1,
+                permitted_direction={'Numerical': 'increase'},
+            )
+
     @pytest.mark.parametrize(("desired_class", "total_CFs", "permitted_range"),
                              [(1, 1, {'Numerical': [10, 150]})])
     def test_permitted_range(
@@ -440,6 +466,112 @@ class TestExplainerBaseBinaryClassification:
                 assert all(
                     permitted_range[feature][0] <= ans.cf_examples_list[0].final_cfs_df_sparse[feature].values[i] <=
                     permitted_range[feature][1] for i in range(total_CFs))
+
+    @pytest.mark.parametrize(
+        ('query_instance', 'desired_class', 'permitted_direction', 'expected_comparison'),
+        [
+            (pd.DataFrame({'Categorical': ['c'], 'Numerical': [8]}), 0, {'Numerical': 'increase'}, 'ge'),
+            (pd.DataFrame({'Categorical': ['c'], 'Numerical': [4]}), 0, {'Numerical': 'decrease'}, 'le'),
+        ],
+    )
+    def test_permitted_direction(
+            self, method, query_instance, desired_class, permitted_direction, expected_comparison,
+            sklearn_binary_classification_model_interface):
+        binary_public_data_interface = dice_ml.Data(
+            dataframe=helpers.load_custom_testing_dataset_binary(),
+            continuous_features=['Numerical'],
+            outcome_name='Outcome',
+        )
+        exp = dice_ml.Dice(
+            binary_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method=method)
+
+        kwargs = {'posthoc_sparsity_param': 0}
+        if method == 'random':
+            kwargs.update({'sample_size': 2000, 'random_seed': 0})
+        elif method == 'genetic':
+            kwargs.update({'initialization': 'kdtree', 'maxiterations': 30})
+
+        ans = exp.generate_counterfactuals(
+            query_instances=query_instance,
+            features_to_vary=['Numerical'],
+            permitted_direction=permitted_direction,
+            total_CFs=1,
+            desired_class=desired_class,
+            **kwargs
+        )
+
+        cf_examples = ans.cf_examples_list[0]
+        final_cfs_df = cf_examples.final_cfs_df_sparse if cf_examples.final_cfs_df_sparse is not None \
+            else cf_examples.final_cfs_df
+
+        assert final_cfs_df is not None
+        if expected_comparison == 'ge':
+            assert final_cfs_df['Numerical'].iloc[0] >= query_instance['Numerical'].iloc[0]
+        else:
+            assert final_cfs_df['Numerical'].iloc[0] <= query_instance['Numerical'].iloc[0]
+
+    def test_permitted_direction_rejects_empty_intersection(
+            self, method, sklearn_binary_classification_model_interface):
+        binary_public_data_interface = dice_ml.Data(
+            dataframe=helpers.load_custom_testing_dataset_binary(),
+            continuous_features=['Numerical'],
+            outcome_name='Outcome',
+        )
+        exp = dice_ml.Dice(
+            binary_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method=method)
+        query_instance = pd.DataFrame({'Categorical': ['c'], 'Numerical': [4]})
+
+        kwargs = {'posthoc_sparsity_param': 0}
+        if method == 'random':
+            kwargs.update({'sample_size': 50, 'random_seed': 0})
+        elif method == 'genetic':
+            kwargs.update({'initialization': 'kdtree', 'maxiterations': 5})
+
+        with pytest.raises(
+                UserConfigValidationException,
+                match=r"No valid values remain for feature Numerical after applying permitted_direction='decrease'."):
+            exp.generate_counterfactuals(
+                query_instances=query_instance,
+                total_CFs=1,
+                desired_class=0,
+                permitted_range={'Numerical': [5, 10]},
+                permitted_direction={'Numerical': 'decrease'},
+                **kwargs
+            )
+
+    def test_fixed_continuous_feature_must_stay_within_constraints(
+            self, method, sklearn_binary_classification_model_interface):
+        binary_public_data_interface = dice_ml.Data(
+            dataframe=helpers.load_custom_testing_dataset_binary(),
+            continuous_features=['Numerical'],
+            outcome_name='Outcome',
+        )
+        exp = dice_ml.Dice(
+            binary_public_data_interface,
+            sklearn_binary_classification_model_interface,
+            method=method)
+        query_instance = pd.DataFrame({'Categorical': ['c'], 'Numerical': [8]})
+
+        kwargs = {'posthoc_sparsity_param': 0}
+        if method == 'random':
+            kwargs.update({'sample_size': 50, 'random_seed': 0})
+        elif method == 'genetic':
+            kwargs.update({'initialization': 'kdtree', 'maxiterations': 5})
+
+        with pytest.raises(
+                ValueError, match="is outside the permitted range and isn't allowed to vary"):
+            exp.generate_counterfactuals(
+                query_instances=query_instance,
+                total_CFs=1,
+                desired_class=0,
+                features_to_vary=['Categorical'],
+                permitted_range={'Numerical': [1, 4]},
+                **kwargs
+            )
 
     # Testing for 0 CFs needed
     @pytest.mark.parametrize(("features_to_vary", "desired_class", "desired_range", "total_CFs", "permitted_range"),

@@ -9,6 +9,12 @@ from dice_ml.utils.exception import SystemException
 
 
 class _BaseData(ABC):
+    _SUPPORTED_DIRECTIONS = {
+        'increase': 'increase',
+        'increasing': 'increase',
+        'decrease': 'decrease',
+        'decreasing': 'decrease',
+    }
 
     def _validate_and_set_data_name(self, params):
         """Validate and set the data name."""
@@ -55,6 +61,49 @@ class _BaseData(ABC):
                             raise UserConfigValidationException(
                                 'The category {0} does not occur in the training data for feature {1}.'
                                 ' Allowed categories are {2}'.format(test_category, feature, train_categories))
+
+    def check_permitted_direction(self, permitted_direction):
+        if permitted_direction is None:
+            return
+
+        permitted_direction_features = list(permitted_direction)
+        not_training_features = set(permitted_direction_features) - set(self.feature_names)
+        if len(not_training_features) > 0:
+            raise UserConfigValidationException("Got features {0} which are not present in training data".format(
+                not_training_features))
+
+        categorical_features = set(permitted_direction_features) & set(self.categorical_feature_names)
+        if len(categorical_features) > 0:
+            raise UserConfigValidationException(
+                "Got features {0} for permitted_direction, but direction constraints are supported only for"
+                " continuous features".format(categorical_features)
+            )
+
+        invalid_directions = {}
+        for feature, direction in permitted_direction.items():
+            if not isinstance(direction, str):
+                invalid_directions[feature] = direction
+                continue
+
+            if direction.strip().lower() not in self._SUPPORTED_DIRECTIONS:
+                invalid_directions[feature] = direction
+
+        if len(invalid_directions) > 0:
+            raise UserConfigValidationException(
+                "Got invalid direction constraints {0}. Supported directions are {1}".format(
+                    invalid_directions, sorted(set(self._SUPPORTED_DIRECTIONS.values()))
+                )
+            )
+
+    def normalize_permitted_direction(self, permitted_direction):
+        self.check_permitted_direction(permitted_direction)
+        if permitted_direction is None:
+            return None
+
+        return {
+            feature: self._SUPPORTED_DIRECTIONS[direction.strip().lower()]
+            for feature, direction in permitted_direction.items()
+        }
 
     def _validate_and_set_permitted_range(self, params, features_dict=None):
         """Validate and set the dictionary of permitted ranges for continuous features."""

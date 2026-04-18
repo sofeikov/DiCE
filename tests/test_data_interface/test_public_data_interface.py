@@ -220,6 +220,27 @@ class TestChecksPublicDataInterface:
         assert 'The category {0} does not occur in the training data for feature {1}. Allowed categories are {2}'.format(
             'unknown_category', 'new_feature', ['known_category']) in str(ucve)
 
+    @pytest.mark.parametrize(
+        ('permitted_direction', 'match'),
+        [
+            ({'not_a_feature': 'increase'}, "Got features {'not_a_feature'} which are not present in training data"),
+            ({'Categorical': 'increase'}, "direction constraints are supported only for continuous features"),
+            ({'Numerical': 'sideways'}, "Got invalid direction constraints"),
+        ],
+    )
+    def test_check_permitted_direction(self, permitted_direction, match):
+        dataset = helpers.load_custom_testing_dataset_binary()
+        dice_data = dice_ml.Data(dataframe=dataset, continuous_features=['Numerical'], outcome_name='Outcome')
+
+        with pytest.raises(UserConfigValidationException, match=match):
+            dice_data.check_permitted_direction(permitted_direction=permitted_direction)
+
+    def test_normalize_permitted_direction(self):
+        dataset = helpers.load_custom_testing_dataset_binary()
+        dice_data = dice_ml.Data(dataframe=dataset, continuous_features=['Numerical'], outcome_name='Outcome')
+
+        assert dice_data.normalize_permitted_direction({'Numerical': 'Increasing'}) == {'Numerical': 'increase'}
+
     @pytest.mark.parametrize('new_float_data_type', [np.float64, np.float32, np.float16])
     @pytest.mark.parametrize('new_int_data_type', [np.int64, np.int32, np.int16, np.int8])
     def test_get_data_type_success(self, new_float_data_type, new_int_data_type):

@@ -230,6 +230,41 @@ class TestDiceTorchMethods:
                 posthoc_sparsity_param=0,
             )
 
+    @pytest.mark.parametrize(
+        ("permitted_direction", "expected_comparison"),
+        [
+            ({"hours_per_week": "increase"}, "ge"),
+            ({"hours_per_week": "decrease"}, "le"),
+        ],
+    )
+    def test_respects_permitted_direction(
+        self,
+        sample_adultincome_query,
+        permitted_direction,
+        expected_comparison,
+    ):
+        counterfactual_explanations = self.exp.generate_counterfactuals(
+            sample_adultincome_query,
+            total_CFs=1,
+            desired_class="opposite",
+            features_to_vary=["hours_per_week"],
+            permitted_direction=permitted_direction,
+            min_iter=0,
+            max_iter=1,
+            posthoc_sparsity_param=0,
+            best_effort=True,
+        )
+
+        final_cfs_df = counterfactual_explanations.cf_examples_list[0].final_cfs_df
+        assert final_cfs_df is not None
+
+        query_value = sample_adultincome_query["hours_per_week"].iloc[0]
+        counterfactual_value = final_cfs_df["hours_per_week"].iloc[0]
+        if expected_comparison == "ge":
+            assert counterfactual_value >= query_value
+        else:
+            assert counterfactual_value <= query_value
+
     @pytest.mark.parametrize("version", ["1.0", "2.0"])
     def test_best_effort_metadata_survives_serialization(
         self,

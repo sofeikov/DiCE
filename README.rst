@@ -274,6 +274,23 @@ It also supports simple constraints on
 features that reflect practical constraints (e.g., working hours per week
 should be between 10 and 50 using the ``permitted_range`` parameter).
 
+For continuous features, DiCE also supports query-relative direction constraints.
+For example, you can require that a counterfactual only increases working hours,
+or only decreases age, by passing ``permitted_direction``. ``"increase"``
+means the counterfactual value must be greater than or equal to the query value;
+``"decrease"`` means it must be less than or equal to the query value. When both
+``permitted_range`` and ``permitted_direction`` are provided, DiCE uses their
+intersection. Direction constraints are currently supported only for continuous
+features.
+
+.. code:: python
+
+    dice_exp = exp.generate_counterfactuals(
+                    query_instance,
+                    total_CFs=4, desired_class="opposite",
+                    features_to_vary=['hours_per_week'],
+                    permitted_direction={'hours_per_week': 'increase'})
+
 For more details, check out `this <https://github.com/interpretml/DiCE/blob/master/docs/source/notebooks/DiCE_model_agnostic_CFs.ipynb>`_ notebook.
 
 The promise of counterfactual explanations

@@ -210,7 +210,7 @@ class DiceGenetic(ExplainerBase):
                                   yloss_type="hinge_loss", diversity_loss_type="dpp_style:inverse_dist",
                                   feature_weights="inverse_mad", stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="binary", maxiterations=500, thresh=1e-2, verbose=False,
-                                  best_effort=False, desired_class_probability_delta=None):
+                                  best_effort=False, desired_class_probability_delta=None, permitted_direction=None):
         """Generates diverse counterfactual explanations
 
         :param query_instance: A dictionary of feature names and values. Test point of interest.
@@ -229,6 +229,8 @@ class DiceGenetic(ExplainerBase):
         :param permitted_range: Dictionary with continuous feature names as keys and permitted min-max range in list as values.
                                 Defaults to the range inferred from training data. If None, uses the parameters initialized
                                 in data_interface.
+        :param permitted_direction: Dictionary with continuous feature names as keys and values
+                                    ``"increase"`` or ``"decrease"``.
         :param yloss_type: Metric for y-loss of the optimization function. Takes "l2_loss" or "log_loss" or "hinge_loss".
         :param diversity_loss_type: Metric for diversity loss of the optimization function.
                                     Takes "avg_dist" or "dpp_style:inverse_dist".
@@ -270,7 +272,10 @@ class DiceGenetic(ExplainerBase):
 
         self.start_time = timeit.default_timer()
 
-        features_to_vary = self.setup(features_to_vary, permitted_range, query_instance, feature_weights)
+        features_to_vary = self.setup(
+            features_to_vary, permitted_range, query_instance, feature_weights,
+            permitted_direction=permitted_direction
+        )
 
         # Prepares user defined query_instance for DiCE.
         query_instance_orig = query_instance
