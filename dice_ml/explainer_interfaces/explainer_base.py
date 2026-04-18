@@ -201,10 +201,22 @@ class ExplainerBase(ABC):
             for parameter in explainer_signature.parameters.values()
         )
 
+    def _add_optional_explainer_argument(self, explainer_kwargs, argument_name, argument_value):
+        if argument_value is None:
+            return
+
+        if not self._explainer_supports_argument("_generate_counterfactuals", argument_name):
+            raise UserConfigValidationException(
+                "The {0} parameter is not supported by this explainer implementation.".format(argument_name)
+            )
+
+        explainer_kwargs[argument_name] = argument_value
+
     def _invoke_generate_counterfactuals(
             self, query_instance, total_CFs, desired_class, desired_range, permitted_range, permitted_direction,
             features_to_vary, stopping_threshold, posthoc_sparsity_param,
-            posthoc_sparsity_algorithm, verbose, desired_class_probability_delta, **kwargs):
+            posthoc_sparsity_algorithm, verbose, desired_class_probability_delta,
+            counterfactual_selection_strategy, **kwargs):
         explainer_kwargs = {
             "desired_class": desired_class,
             "desired_range": desired_range,
@@ -225,12 +237,18 @@ class ExplainerBase(ABC):
             explainer_kwargs["permitted_direction"] = permitted_direction
 
         if desired_class_probability_delta is not None:
-            if not self._explainer_supports_argument("_generate_counterfactuals", "desired_class_probability_delta"):
-                raise UserConfigValidationException(
-                    "The desired_class_probability_delta parameter is not supported by this explainer implementation."
-                )
-            explainer_kwargs["desired_class_probability_delta"] = desired_class_probability_delta
+            self._add_optional_explainer_argument(
+                explainer_kwargs,
+                "desired_class_probability_delta",
+                desired_class_probability_delta,
+            )
             explainer_kwargs["stopping_threshold"] = stopping_threshold
+
+        self._add_optional_explainer_argument(
+            explainer_kwargs,
+            "counterfactual_selection_strategy",
+            counterfactual_selection_strategy,
+        )
 
         return self._generate_counterfactuals(
             query_instance,
@@ -243,7 +261,8 @@ class ExplainerBase(ABC):
                                  permitted_range=None, features_to_vary="all",
                                  stopping_threshold=None, posthoc_sparsity_param=0.1,
                                  posthoc_sparsity_algorithm="linear", verbose=False,
-                                 desired_class_probability_delta=None, permitted_direction=None, **kwargs):
+                                 desired_class_probability_delta=None,
+                                 counterfactual_selection_strategy=None, permitted_direction=None, **kwargs):
         """General method for generating counterfactuals.
 
         :param query_instances: Input point(s) for which counterfactuals are to be generated.
@@ -268,6 +287,10 @@ class ExplainerBase(ABC):
                                                 DiCE resolves the effective target threshold per query as the current
                                                 desired-class score plus this delta. Classification only; cannot be
                                                 combined with ``stopping_threshold``.
+        :param counterfactual_selection_strategy: Optional selection strategy for explainer-specific candidate ranking.
+                                                  The PyTorch gradient explainer supports
+                                                  ``closest_to_threshold`` (default behavior) and
+                                                  ``maximize_desired_class_score``.
         :param proximity_weight: A positive float. Larger this weight, more close the counterfactuals are to the
                                  query_instance. Used by ['genetic', 'gradientdescent'],
                                  ignored by ['random', 'kdtree'] methods.
@@ -288,7 +311,9 @@ class ExplainerBase(ABC):
         :param kwargs: Other parameters accepted by specific explanation methods, for example
                        ``best_effort=True`` for the PyTorch gradient, random sampling, genetic,
                        and KD-tree explainers to explicitly return metadata-labelled best-effort
-                       approximations when an exact result cannot be produced.
+                       approximations when an exact result cannot be produced, or
+                       ``counterfactual_selection_strategy="maximize_desired_class_score"``
+                       for the PyTorch gradient explainer.
 
         :returns: A CounterfactualExplanations object that contains the list of
                   counterfactual examples per query_instance as one of its attributes.
@@ -328,6 +353,7 @@ class ExplainerBase(ABC):
                 posthoc_sparsity_algorithm=posthoc_sparsity_algorithm,
                 verbose=verbose,
                 desired_class_probability_delta=desired_class_probability_delta,
+                counterfactual_selection_strategy=counterfactual_selection_strategy,
                 **kwargs
             )
             res.test_instance_df = self.data_interface.ensure_consistent_type(
@@ -349,7 +375,8 @@ class ExplainerBase(ABC):
                                   permitted_range=None, features_to_vary="all",
                                   stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", verbose=False,
-                                  desired_class_probability_delta=None, permitted_direction=None, **kwargs):
+                                  desired_class_probability_delta=None,
+                                  counterfactual_selection_strategy=None, permitted_direction=None, **kwargs):
         """Internal method for generating counterfactuals for a given query instance. Any explainerclass
            inherting from this class would need to implement this abstract method.
 
@@ -374,6 +401,7 @@ class ExplainerBase(ABC):
                                                 DiCE resolves the effective target threshold per query as the current
                                                 desired-class score plus this delta. Classification only; cannot be
                                                 combined with ``stopping_threshold``.
+        :param counterfactual_selection_strategy: Optional selection strategy for explainer-specific candidate ranking.
         :param posthoc_sparsity_param: Parameter for the post-hoc operation on continuous features to enhance sparsity.
         :param posthoc_sparsity_algorithm: Perform either linear or binary search. Takes "linear" or "binary".
                                            Prefer binary search when a feature range is large (for instance,
@@ -1022,6 +1050,8 @@ class ExplainerBase(ABC):
             metadata["target_class"] = int(self.target_cf_class)
             if getattr(self, "desired_class_probability_delta", None) is not None:
                 metadata["desired_class_probability_delta"] = float(self.desired_class_probability_delta)
+            if getattr(self, "counterfactual_selection_strategy", None) is not None:
+                metadata["counterfactual_selection_strategy"] = self.counterfactual_selection_strategy
         else:
             metadata["counterfactual_outcomes"] = [
                 self._get_regression_model_output(score) for score in model_scores

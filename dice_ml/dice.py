@@ -36,7 +36,8 @@ class Dice(ExplainerBase):
                                   permitted_range=None, features_to_vary="all",
                                   stopping_threshold=None, posthoc_sparsity_param=0.1,
                                   posthoc_sparsity_algorithm="linear", verbose=False,
-                                  desired_class_probability_delta=None, **kwargs):
+                                  desired_class_probability_delta=None,
+                                  counterfactual_selection_strategy=None, **kwargs):
         raise NotImplementedError("This method should be implemented by the concrete classes "
                                   "that inherit from ExplainerBase")
 

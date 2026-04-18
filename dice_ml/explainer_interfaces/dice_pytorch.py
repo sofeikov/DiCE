@@ -15,6 +15,12 @@ from dice_ml.explainer_interfaces.explainer_base import ExplainerBase
 
 
 class DicePyTorch(ExplainerBase):
+    CLOSEST_TO_THRESHOLD = "closest_to_threshold"
+    MAXIMIZE_DESIRED_CLASS_SCORE = "maximize_desired_class_score"
+    COUNTERFACTUAL_SELECTION_STRATEGIES = (
+        CLOSEST_TO_THRESHOLD,
+        MAXIMIZE_DESIRED_CLASS_SCORE,
+    )
 
     def __init__(self, data_interface, model_interface):
         """Init method
@@ -45,6 +51,7 @@ class DicePyTorch(ExplainerBase):
         self.feature_weights_input = ''
         self.hyperparameters = [1, 1, 1]  # proximity_weight, diversity_weight, categorical_penalty
         self.optimizer_weights = []  # optimizer, learning_rate
+        self.counterfactual_selection_strategy = self.CLOSEST_TO_THRESHOLD
 
     def _generate_counterfactuals(self, query_instance, total_CFs,
                                   desired_class="opposite", desired_range=None,
@@ -57,7 +64,8 @@ class DicePyTorch(ExplainerBase):
                                   init_near_query_instance=True, tie_random=False, stopping_threshold=None,
                                   posthoc_sparsity_param=0.1, posthoc_sparsity_algorithm="linear",
                                   limit_steps_ls=10000, best_effort=False,
-                                  desired_class_probability_delta=None, permitted_direction=None):
+                                  desired_class_probability_delta=None,
+                                  counterfactual_selection_strategy=None, permitted_direction=None):
         """Generates diverse counterfactual explanations.
 
         :param query_instance: Test point of interest. A dictionary of feature names and values or a single row dataframe
@@ -102,19 +110,27 @@ class DicePyTorch(ExplainerBase):
                                            (for instance, income varying from 10k to 1000k) and only if the features
                                            share a monotonic relationship with predicted outcome in the model.
         :param limit_steps_ls: Defines an upper limit for the linear search step in the posthoc_sparsity_enhancement
-        :param best_effort: When True, explicitly keeps and returns the closest available optimization result even if
-                            it does not satisfy the requested stopping_threshold. Returned metadata indicates whether
-                            each counterfactual met the threshold or is a best-effort approximation.
+        :param best_effort: When True, explicitly keeps and returns the best available optimization result even if
+                            it does not satisfy the requested stopping_threshold. Candidates are ranked according to
+                            ``counterfactual_selection_strategy``. Returned metadata indicates whether each
+                            counterfactual met the threshold or is a best-effort approximation.
         :param desired_class_probability_delta: Optional relative uplift for the desired-class probability/score.
                                                 DiCE resolves the effective target threshold per query as the current
                                                 desired-class score plus this delta. Classification only; cannot be
                                                 combined with ``stopping_threshold``.
+        :param counterfactual_selection_strategy: Candidate-ranking strategy for the PyTorch gradient explainer.
+                                                  ``closest_to_threshold`` preserves the legacy behavior and
+                                                  ``maximize_desired_class_score`` keeps the best desired-class
+                                                  probability/score seen during optimization.
 
         :return: A CounterfactualExamples object to store and visualize the resulting
                  counterfactual explanations (see diverse_counterfactuals.py).
         """
         if not isinstance(best_effort, bool):
             raise UserConfigValidationException("The best_effort parameter should be a boolean.")
+        self.counterfactual_selection_strategy = self._resolve_counterfactual_selection_strategy(
+            counterfactual_selection_strategy
+        )
 
         # check feature MAD validity and throw warnings
         if feature_weights == "inverse_mad":
@@ -453,6 +469,41 @@ class DicePyTorch(ExplainerBase):
             [abs(self.get_target_class_score(pred) - self.stopping_threshold) for pred in predictions]
         )
 
+    def _resolve_counterfactual_selection_strategy(self, counterfactual_selection_strategy):
+        if counterfactual_selection_strategy is None:
+            return self.CLOSEST_TO_THRESHOLD
+
+        if counterfactual_selection_strategy in self.COUNTERFACTUAL_SELECTION_STRATEGIES:
+            return counterfactual_selection_strategy
+
+        raise UserConfigValidationException(
+            "The counterfactual_selection_strategy should be {0} and not {1}".format(
+                " or ".join(self.COUNTERFACTUAL_SELECTION_STRATEGIES),
+                counterfactual_selection_strategy,
+            )
+        )
+
+    def _score_predictions_for_selection(self, predictions):
+        if self.counterfactual_selection_strategy == self.CLOSEST_TO_THRESHOLD:
+            return float(self._get_average_prediction_distance_from_threshold(predictions))
+
+        return float(np.mean([self.get_target_class_score(pred) for pred in predictions]))
+
+    def _is_better_selection_score(self, selection_score, best_selection_score):
+        if best_selection_score is None:
+            return True
+
+        if self.counterfactual_selection_strategy == self.CLOSEST_TO_THRESHOLD:
+            return selection_score < best_selection_score
+
+        return selection_score > best_selection_score
+
+    @staticmethod
+    def _restore_backup_candidates(final_cfs, cfs_preds, total_CFs, loop_ix, backup_cfs, backup_preds):
+        for ix in range(total_CFs):
+            final_cfs[loop_ix + ix] = copy.deepcopy(backup_cfs[loop_ix + ix])
+            cfs_preds[loop_ix + ix] = copy.deepcopy(backup_preds[loop_ix + ix])
+
     @staticmethod
     def _store_backup_candidates(backup_cfs, backup_preds, start_index, candidates, predictions):
         for ix, candidate in enumerate(candidates):
@@ -463,10 +514,10 @@ class DicePyTorch(ExplainerBase):
         return self.build_counterfactual_metadata(self.cfs_preds, best_effort)
 
     def _update_backup_candidates(self, loop_ix, candidates, predictions):
-        avg_preds_dist = self._get_average_prediction_distance_from_threshold(predictions)
+        selection_score = self._score_predictions_for_selection(predictions)
 
-        if avg_preds_dist < self.best_effort_min_dist_from_threshold[loop_ix]:
-            self.best_effort_min_dist_from_threshold[loop_ix] = avg_preds_dist
+        if self._is_better_selection_score(selection_score, self.best_effort_backup_selection_score[loop_ix]):
+            self.best_effort_backup_selection_score[loop_ix] = selection_score
             self._store_backup_candidates(
                 self.best_effort_backup_cfs,
                 self.best_effort_backup_cfs_preds,
@@ -475,8 +526,9 @@ class DicePyTorch(ExplainerBase):
                 predictions,
             )
 
-        if all(self.is_cf_valid(pred) for pred in predictions) and avg_preds_dist < self.min_dist_from_threshold[loop_ix]:
-            self.min_dist_from_threshold[loop_ix] = avg_preds_dist
+        if all(self.is_cf_valid(pred) for pred in predictions) and \
+                self._is_better_selection_score(selection_score, self.best_backup_selection_score[loop_ix]):
+            self.best_backup_selection_score[loop_ix] = selection_score
             self._store_backup_candidates(
                 self.best_backup_cfs,
                 self.best_backup_cfs_preds,
@@ -486,22 +538,36 @@ class DicePyTorch(ExplainerBase):
             )
 
     def _restore_backup_cfs_if_needed(self, loop_find_CFs, best_effort):
-        if not any(not self.is_cf_valid(pred) for pred in self.cfs_preds):
+        final_cfs_are_valid = not any(not self.is_cf_valid(pred) for pred in self.cfs_preds)
+        should_restore_valid_backups = (
+            final_cfs_are_valid and
+            self.counterfactual_selection_strategy == self.MAXIMIZE_DESIRED_CLASS_SCORE
+        )
+
+        if final_cfs_are_valid and not should_restore_valid_backups:
             return
 
         for loop_ix in range(loop_find_CFs):
-            if self.min_dist_from_threshold[loop_ix] != 100:
-                backup_cfs = self.best_backup_cfs
-                backup_preds = self.best_backup_cfs_preds
-            elif best_effort and self.best_effort_min_dist_from_threshold[loop_ix] != 100:
-                backup_cfs = self.best_effort_backup_cfs
-                backup_preds = self.best_effort_backup_cfs_preds
-            else:
+            if self.best_backup_selection_score[loop_ix] is not None:
+                self._restore_backup_candidates(
+                    self.final_cfs,
+                    self.cfs_preds,
+                    self.total_CFs,
+                    loop_ix,
+                    self.best_backup_cfs,
+                    self.best_backup_cfs_preds,
+                )
                 continue
 
-            for ix in range(self.total_CFs):
-                self.final_cfs[loop_ix+ix] = copy.deepcopy(backup_cfs[loop_ix+ix])
-                self.cfs_preds[loop_ix+ix] = copy.deepcopy(backup_preds[loop_ix+ix])
+            if best_effort and self.best_effort_backup_selection_score[loop_ix] is not None:
+                self._restore_backup_candidates(
+                    self.final_cfs,
+                    self.cfs_preds,
+                    self.total_CFs,
+                    loop_ix,
+                    self.best_effort_backup_cfs,
+                    self.best_effort_backup_cfs_preds,
+                )
 
     def _get_return_indices(self, total_counterfactuals, best_effort, minutes, seconds):
         if all(self.is_cf_valid(pred) for pred in self.cfs_preds):
@@ -583,10 +649,10 @@ class DicePyTorch(ExplainerBase):
         # if the CFs dont converge in max_iter iterations, then best_backup_cfs is returned.
         self.best_backup_cfs = [0]*max(self.total_CFs, loop_find_CFs)
         self.best_backup_cfs_preds = [0]*max(self.total_CFs, loop_find_CFs)
-        self.min_dist_from_threshold = [100]*loop_find_CFs  # for backup CFs
+        self.best_backup_selection_score = [None]*loop_find_CFs
         self.best_effort_backup_cfs = [0]*max(self.total_CFs, loop_find_CFs)
         self.best_effort_backup_cfs_preds = [0]*max(self.total_CFs, loop_find_CFs)
-        self.best_effort_min_dist_from_threshold = [100]*loop_find_CFs
+        self.best_effort_backup_selection_score = [None]*loop_find_CFs
 
         for loop_ix in range(loop_find_CFs):
             # CF init
